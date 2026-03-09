@@ -1,0 +1,1300 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PRD — Steam Farming Panel</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --bg2: #1a1d27;
+    --bg3: #22253a;
+    --border: #2e3150;
+    --accent: #5865f2;
+    --accent2: #7289da;
+    --green: #3ba55d;
+    --yellow: #faa61a;
+    --red: #ed4245;
+    --text: #e3e5e8;
+    --muted: #72767d;
+    --dev1: #5865f2;
+    --dev2: #3ba55d;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+    min-height: 100vh;
+  }
+
+  /* SIDEBAR */
+  .sidebar {
+    position: fixed;
+    top: 0; left: 0;
+    width: 260px;
+    height: 100vh;
+    background: var(--bg2);
+    border-right: 1px solid var(--border);
+    overflow-y: auto;
+    z-index: 100;
+    padding-bottom: 24px;
+  }
+  .sidebar-logo {
+    padding: 20px 20px 16px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 8px;
+  }
+  .sidebar-logo .title {
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--text);
+    letter-spacing: 0.3px;
+  }
+  .sidebar-logo .version {
+    font-size: 11px;
+    color: var(--muted);
+    margin-top: 2px;
+  }
+  .nav-section {
+    padding: 6px 12px 2px;
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-top: 8px;
+  }
+  .nav-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 16px;
+    font-size: 13px;
+    color: var(--muted);
+    cursor: pointer;
+    border-radius: 4px;
+    margin: 1px 8px;
+    text-decoration: none;
+    transition: all 0.15s;
+  }
+  .nav-item:hover, .nav-item.active {
+    background: var(--bg3);
+    color: var(--text);
+  }
+  .nav-item .dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--muted);
+    flex-shrink: 0;
+  }
+  .nav-item.active .dot { background: var(--accent); }
+
+  /* MAIN */
+  .main {
+    margin-left: 260px;
+    min-height: 100vh;
+  }
+  .topbar {
+    position: sticky;
+    top: 0;
+    background: rgba(15,17,23,0.95);
+    backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--border);
+    padding: 16px 40px;
+    z-index: 50;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .topbar h1 { font-size: 18px; font-weight: 700; }
+  .topbar .meta { font-size: 12px; color: var(--muted); }
+  .badges { display: flex; gap: 8px; }
+  .badge {
+    padding: 3px 10px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .badge-blue { background: rgba(88,101,242,0.2); color: var(--accent2); border: 1px solid rgba(88,101,242,0.3); }
+  .badge-green { background: rgba(59,165,93,0.2); color: #57f287; border: 1px solid rgba(59,165,93,0.3); }
+  .badge-yellow { background: rgba(250,166,26,0.2); color: var(--yellow); border: 1px solid rgba(250,166,26,0.3); }
+
+  .content { padding: 40px; max-width: 1200px; }
+
+  /* SECTIONS */
+  section { margin-bottom: 56px; scroll-margin-top: 80px; }
+  .section-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 24px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  .section-icon {
+    width: 36px; height: 36px;
+    border-radius: 8px;
+    background: rgba(88,101,242,0.15);
+    border: 1px solid rgba(88,101,242,0.25);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 16px;
+  }
+  .section-title { font-size: 20px; font-weight: 700; }
+  .section-sub { font-size: 13px; color: var(--muted); margin-top: 2px; }
+
+  /* CARDS */
+  .card {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px;
+    margin-bottom: 16px;
+  }
+  .card-title {
+    font-size: 14px;
+    font-weight: 600;
+    margin-bottom: 16px;
+    color: var(--text);
+  }
+
+  /* TABLES */
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th {
+    text-align: left;
+    padding: 10px 14px;
+    background: var(--bg3);
+    color: var(--muted);
+    font-weight: 600;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    border-bottom: 1px solid var(--border);
+  }
+  th:first-child { border-radius: 8px 0 0 0; }
+  th:last-child { border-radius: 0 8px 0 0; }
+  td {
+    padding: 10px 14px;
+    border-bottom: 1px solid rgba(46,49,80,0.5);
+    vertical-align: top;
+  }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: rgba(255,255,255,0.02); }
+
+  /* PRIORITY BADGES */
+  .p0 { background: rgba(237,66,69,0.15); color: #f87171; border: 1px solid rgba(237,66,69,0.3); border-radius: 6px; padding: 1px 7px; font-size: 11px; font-weight: 700; white-space: nowrap; }
+  .p1 { background: rgba(250,166,26,0.15); color: var(--yellow); border: 1px solid rgba(250,166,26,0.3); border-radius: 6px; padding: 1px 7px; font-size: 11px; font-weight: 700; white-space: nowrap; }
+  .p2 { background: rgba(88,101,242,0.15); color: var(--accent2); border: 1px solid rgba(88,101,242,0.3); border-radius: 6px; padding: 1px 7px; font-size: 11px; font-weight: 700; white-space: nowrap; }
+
+  /* DEV ASSIGNMENTS */
+  .dev1-tag {
+    display: inline-flex; align-items: center; gap: 5px;
+    background: rgba(88,101,242,0.15);
+    color: #a5b4fc;
+    border: 1px solid rgba(88,101,242,0.3);
+    border-radius: 6px; padding: 2px 8px;
+    font-size: 11px; font-weight: 600; white-space: nowrap;
+  }
+  .dev2-tag {
+    display: inline-flex; align-items: center; gap: 5px;
+    background: rgba(59,165,93,0.15);
+    color: #6ee7b7;
+    border: 1px solid rgba(59,165,93,0.3);
+    border-radius: 6px; padding: 2px 8px;
+    font-size: 11px; font-weight: 600; white-space: nowrap;
+  }
+  .dev1-tag::before { content: "●"; font-size: 8px; color: #818cf8; }
+  .dev2-tag::before { content: "●"; font-size: 8px; color: #34d399; }
+
+  /* PHASE CARDS */
+  .phase {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    margin-bottom: 20px;
+    overflow: hidden;
+  }
+  .phase-header {
+    padding: 18px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    user-select: none;
+  }
+  .phase-header:hover { background: rgba(255,255,255,0.02); }
+  .phase-left { display: flex; align-items: center; gap: 14px; }
+  .phase-num {
+    width: 40px; height: 40px;
+    border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 16px; font-weight: 800;
+    flex-shrink: 0;
+  }
+  .phase-info .name { font-size: 15px; font-weight: 700; }
+  .phase-info .weeks { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .phase-right { display: flex; align-items: center; gap: 10px; }
+  .phase-weeks-badge {
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 600;
+    border: 1px solid;
+  }
+  .phase-body { padding: 0; }
+  .phase-body table th:first-child, .phase-body table th:last-child { border-radius: 0; }
+
+  /* COLORS per phase */
+  .ph0 .phase-num { background: rgba(139,92,246,0.2); color: #a78bfa; }
+  .ph0 .phase-weeks-badge { background: rgba(139,92,246,0.15); color: #a78bfa; border-color: rgba(139,92,246,0.3); }
+  .ph1 .phase-num { background: rgba(59,130,246,0.2); color: #60a5fa; }
+  .ph1 .phase-weeks-badge { background: rgba(59,130,246,0.15); color: #60a5fa; border-color: rgba(59,130,246,0.3); }
+  .ph2 .phase-num { background: rgba(249,115,22,0.2); color: #fb923c; }
+  .ph2 .phase-weeks-badge { background: rgba(249,115,22,0.15); color: #fb923c; border-color: rgba(249,115,22,0.3); }
+  .ph3 .phase-num { background: rgba(20,184,166,0.2); color: #2dd4bf; }
+  .ph3 .phase-weeks-badge { background: rgba(20,184,166,0.15); color: #2dd4bf; border-color: rgba(20,184,166,0.3); }
+  .ph4 .phase-num { background: rgba(234,179,8,0.2); color: #facc15; }
+  .ph4 .phase-weeks-badge { background: rgba(234,179,8,0.15); color: #facc15; border-color: rgba(234,179,8,0.3); }
+  .ph5 .phase-num { background: rgba(236,72,153,0.2); color: #f472b6; }
+  .ph5 .phase-weeks-badge { background: rgba(236,72,153,0.15); color: #f472b6; border-color: rgba(236,72,153,0.3); }
+  .ph6 .phase-num { background: rgba(34,197,94,0.2); color: #4ade80; }
+  .ph6 .phase-weeks-badge { background: rgba(34,197,94,0.15); color: #4ade80; border-color: rgba(34,197,94,0.3); }
+  .ph7 .phase-num { background: rgba(239,68,68,0.2); color: #f87171; }
+  .ph7 .phase-weeks-badge { background: rgba(239,68,68,0.15); color: #f87171; border-color: rgba(239,68,68,0.3); }
+  .ph8 .phase-num { background: rgba(107,114,128,0.2); color: #9ca3af; }
+  .ph8 .phase-weeks-badge { background: rgba(107,114,128,0.15); color: #9ca3af; border-color: rgba(107,114,128,0.3); }
+
+  /* DEV LEGEND */
+  .dev-legend {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-bottom: 32px;
+  }
+  .dev-card {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+  }
+  .dev-card.d1 { border-left: 3px solid var(--dev1); }
+  .dev-card.d2 { border-left: 3px solid var(--dev2); }
+  .dev-name { font-size: 15px; font-weight: 700; margin-bottom: 8px; }
+  .dev-name.d1 { color: #a5b4fc; }
+  .dev-name.d2 { color: #6ee7b7; }
+  .dev-role { font-size: 12px; color: var(--muted); margin-bottom: 12px; }
+  .dev-skill {
+    display: inline-block;
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 2px 8px;
+    font-size: 11px;
+    color: var(--muted);
+    margin: 2px;
+  }
+
+  /* GRID LAYOUTS */
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+
+  /* METRIC CARDS */
+  .metric-card {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+    text-align: center;
+  }
+  .metric-value { font-size: 28px; font-weight: 800; color: var(--accent2); margin-bottom: 4px; }
+  .metric-label { font-size: 12px; color: var(--muted); }
+
+  /* ARCH BOX */
+  .arch-box {
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px 24px;
+    font-family: 'Cascadia Code', 'Fira Code', monospace;
+    font-size: 13px;
+    line-height: 1.8;
+    color: #8b9cf4;
+    white-space: pre;
+    overflow-x: auto;
+  }
+  .arch-box .hl { color: #e2e8f0; font-weight: 600; }
+  .arch-box .c { color: #6ee7b7; }
+  .arch-box .d { color: #fbbf24; }
+
+  /* RISK TABLE */
+  .risk-high { color: #f87171; }
+  .risk-med { color: var(--yellow); }
+  .risk-low { color: #4ade80; }
+
+  /* STACK TAGS */
+  .stack-tag {
+    display: inline-block;
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 6px 14px;
+    font-size: 12px;
+    color: var(--text);
+    margin: 4px;
+    font-family: monospace;
+  }
+
+  /* TIMELINE */
+  .timeline {
+    position: relative;
+    padding-left: 28px;
+  }
+  .timeline::before {
+    content: '';
+    position: absolute;
+    left: 10px; top: 0; bottom: 0;
+    width: 2px;
+    background: var(--border);
+  }
+  .timeline-item {
+    position: relative;
+    margin-bottom: 20px;
+  }
+  .timeline-item::before {
+    content: '';
+    position: absolute;
+    left: -22px; top: 6px;
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    background: var(--accent);
+    border: 2px solid var(--bg);
+  }
+
+  /* MVP BANNER */
+  .mvp-banner {
+    background: linear-gradient(135deg, rgba(88,101,242,0.15), rgba(59,165,93,0.15));
+    border: 1px solid rgba(88,101,242,0.4);
+    border-radius: 12px;
+    padding: 20px 24px;
+    margin-bottom: 24px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+  .mvp-icon { font-size: 28px; }
+  .mvp-title { font-size: 15px; font-weight: 700; color: #a5b4fc; }
+  .mvp-desc { font-size: 13px; color: var(--muted); margin-top: 4px; }
+
+  /* SCROLLBAR */
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: var(--bg2); }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+
+  /* TOGGLE */
+  details summary { list-style: none; }
+  details summary::-webkit-details-marker { display: none; }
+  .chevron { transition: transform 0.2s; display: inline-block; }
+  details[open] .chevron { transform: rotate(90deg); }
+
+  @media (max-width: 900px) {
+    .sidebar { display: none; }
+    .main { margin-left: 0; }
+    .content { padding: 20px; }
+    .grid2, .grid3 { grid-template-columns: 1fr; }
+    .dev-legend { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<!-- SIDEBAR -->
+<nav class="sidebar">
+  <div class="sidebar-logo">
+    <div class="title">Steam Farming Panel</div>
+    <div class="version">PRD v1.0 · 2026-03-06</div>
+  </div>
+
+  <div class="nav-section">Обзор</div>
+  <a href="#overview" class="nav-item active"><span class="dot"></span>Описание продукта</a>
+  <a href="#metrics" class="nav-item"><span class="dot"></span>Метрики и стек</a>
+  <a href="#arch" class="nav-item"><span class="dot"></span>Архитектура</a>
+
+  <div class="nav-section">Требования</div>
+  <a href="#accounts" class="nav-item"><span class="dot"></span>Аккаунты и Прокси</a>
+  <a href="#reg" class="nav-item"><span class="dot"></span>Регистрация</a>
+  <a href="#asf" class="nav-item"><span class="dot"></span>ASF Боты</a>
+  <a href="#warmup" class="nav-item"><span class="dot"></span>Прогрев (Бейджи)</a>
+  <a href="#farming" class="nav-item"><span class="dot"></span>Фарм часов</a>
+  <a href="#achieve" class="nav-item"><span class="dot"></span>Достижения</a>
+  <a href="#levels" class="nav-item"><span class="dot"></span>Повышение уровней</a>
+  <a href="#looter" class="nav-item"><span class="dot"></span>Лутер</a>
+  <a href="#wallet" class="nav-item"><span class="dot"></span>Пополнение</a>
+  <a href="#scheduler" class="nav-item"><span class="dot"></span>Планировщик</a>
+  <a href="#market" class="nav-item"><span class="dot"></span>Маркет и SaaS</a>
+
+  <div class="nav-section">Разработка</div>
+  <a href="#team" class="nav-item"><span class="dot"></span>Команда</a>
+  <a href="#roadmap" class="nav-item"><span class="dot"></span>Роадмап</a>
+  <a href="#risks" class="nav-item"><span class="dot"></span>Риски</a>
+</nav>
+
+<!-- MAIN -->
+<div class="main">
+  <div class="topbar">
+    <div>
+      <h1>Steam Farming Panel — PRD</h1>
+      <div class="meta">Версия 1.0 · 2 разработчика · 20 недель</div>
+    </div>
+    <div class="badges">
+      <span class="badge badge-blue">Draft</span>
+      <span class="badge badge-green">20 недель</span>
+      <span class="badge badge-yellow">MVP → 11 нед.</span>
+    </div>
+  </div>
+
+  <div class="content">
+
+    <!-- OVERVIEW -->
+    <section id="overview">
+      <div class="section-header">
+        <div class="section-icon">🎯</div>
+        <div>
+          <div class="section-title">Обзор продукта</div>
+          <div class="section-sub">Описание, аудитория, платформа</div>
+        </div>
+      </div>
+      <div class="card">
+        <p style="font-size:14px; color: var(--muted); line-height: 1.8;">
+          Десктопное приложение для <strong style="color:var(--text)">массового управления Steam-аккаунтами</strong>:
+          авторегистрация с обходом капчи, прогрев через ASF, фарм часов/кейсов CS2, управление инвентарём,
+          повышение уровней, пополнение кошельков и встроенный маркетплейс. Поддержка от 10 до 500+ аккаунтов одновременно.
+        </p>
+      </div>
+      <div class="grid3">
+        <div class="card">
+          <div class="card-title">🎮 Целевая аудитория</div>
+          <div style="font-size:13px; color:var(--muted); line-height:1.8;">
+            • Фермеры Steam (10–500+ акк.)<br>
+            • Трейдеры CS2 предметами<br>
+            • Покупатели прогретых аккаунтов<br>
+            • Арбитражники кодов пополнения
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-title">💻 Платформа</div>
+          <div style="font-size:13px; color:var(--muted); line-height:1.8;">
+            • Windows 10/11 (primary)<br>
+            • Electron (cross-platform)<br>
+            • Локальный Python backend<br>
+            • Опциональный Cloud API
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-title">💰 Монетизация</div>
+          <div style="font-size:13px; color:var(--muted); line-height:1.8;">
+            • Подписка (месяц / год)<br>
+            • HWID-лицензирование<br>
+            • Внутренний маркетплейс<br>
+            • Внутренняя валюта (стрики)
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- METRICS -->
+    <section id="metrics">
+      <div class="section-header">
+        <div class="section-icon">📊</div>
+        <div>
+          <div class="section-title">Метрики успеха и стек</div>
+        </div>
+      </div>
+      <div class="grid3" style="margin-bottom:20px;">
+        <div class="metric-card">
+          <div class="metric-value">&lt;3 мин</div>
+          <div class="metric-label">Регистрация 1 аккаунта</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-value">&lt;5 мин</div>
+          <div class="metric-label">Community Badge</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-value">85%+</div>
+          <div class="metric-label">Успешность captcha</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-value">50+</div>
+          <div class="metric-label">Параллельных аккаунтов</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-value">&lt;1%</div>
+          <div class="metric-label">Crash rate</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-value">500+</div>
+          <div class="metric-label">Максимум аккаунтов</div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">Технический стек</div>
+        <div style="margin-bottom:10px;">
+          <div style="font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:1px; margin-bottom:8px;">Frontend</div>
+          <span class="stack-tag">Electron</span>
+          <span class="stack-tag">React 18</span>
+          <span class="stack-tag">Tailwind CSS</span>
+          <span class="stack-tag">shadcn/ui</span>
+          <span class="stack-tag">Vite</span>
+        </div>
+        <div style="margin-bottom:10px;">
+          <div style="font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:1px; margin-bottom:8px;">Backend</div>
+          <span class="stack-tag">Python 3.11</span>
+          <span class="stack-tag">FastAPI</span>
+          <span class="stack-tag">SQLAlchemy</span>
+          <span class="stack-tag">APScheduler</span>
+          <span class="stack-tag">asyncio</span>
+        </div>
+        <div style="margin-bottom:10px;">
+          <div style="font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:1px; margin-bottom:8px;">Steam / Автоматизация</div>
+          <span class="stack-tag">steampy</span>
+          <span class="stack-tag">Playwright</span>
+          <span class="stack-tag">ArchiSteamFarm</span>
+          <span class="stack-tag">hcaptcha-challenger</span>
+        </div>
+        <div>
+          <div style="font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:1px; margin-bottom:8px;">Инфраструктура</div>
+          <span class="stack-tag">SQLite (local)</span>
+          <span class="stack-tag">PostgreSQL (cloud)</span>
+          <span class="stack-tag">AES-256 (Fernet)</span>
+          <span class="stack-tag">electron-builder</span>
+          <span class="stack-tag">Claude API</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ARCH -->
+    <section id="arch">
+      <div class="section-header">
+        <div class="section-icon">🏗️</div>
+        <div>
+          <div class="section-title">Архитектура системы</div>
+        </div>
+      </div>
+      <div class="arch-box"><span class="hl">┌─────────────────────────────────────────────────┐
+│           Electron Frontend (React UI)           │
+│   Dashboard · Accounts · ASF · Farming · Market │
+└──────────────────────┬──────────────────────────┘
+                       │ IPC / REST (localhost)
+┌──────────────────────▼──────────────────────────┐
+│            Python Local Backend (FastAPI)        │
+│  ┌──────────────┐  ┌───────────────────────────┐ │
+│  │</span><span class="c"> Steam Engine </span><span class="hl">│  │</span><span class="c"> ASF Controller (subprocess)</span><span class="hl">│ │
+│  └──────────────┘  └───────────────────────────┘ │
+│  ┌──────────────┐  ┌───────────────────────────┐ │
+│  │</span><span class="d"> Captcha Solver</span><span class="hl">│  │</span><span class="d"> Task Scheduler (APScheduler)</span><span class="hl">│ │
+│  └──────────────┘  └───────────────────────────┘ │
+│  ┌──────────────────────────────────────────────┐ │
+│  │        SQLite — локальное хранилище          │ │
+│  │   accounts · proxies · tasks · settings      │ │
+│  └──────────────────────────────────────────────┘ │
+└──────────────────────┬──────────────────────────┘
+                       │ HTTPS
+┌──────────────────────▼──────────────────────────┐
+│              Cloud API (опционально)             │
+│        Auth · Marketplace · Support · Sync       │
+└─────────────────────────────────────────────────┘</span></div>
+    </section>
+
+    <!-- REQUIREMENTS SECTIONS -->
+    <!-- ACCOUNTS -->
+    <section id="accounts">
+      <div class="section-header">
+        <div class="section-icon">👤</div>
+        <div>
+          <div class="section-title">Модуль: Аккаунты и Прокси</div>
+          <div class="section-sub">Импорт, управление, группировка, шифрование</div>
+        </div>
+      </div>
+      <div class="card">
+        <table>
+          <thead><tr><th>#</th><th>Требование</th><th>Приоритет</th></tr></thead>
+          <tbody>
+            <tr><td style="color:var(--muted)">2.1.1</td><td>Импорт аккаунтов из TXT (login:password), drag-and-drop</td><td><span class="p0">P0</span></td></tr>
+            <tr><td style="color:var(--muted)">2.1.2</td><td>Импорт maFile — одиночный файл или выбор папки</td><td><span class="p0">P0</span></td></tr>
+            <tr><td style="color:var(--muted)">2.1.3</td><td>Автопривязка прокси к аккаунтам (round-robin)</td><td><span class="p0">P0</span></td></tr>
+            <tr><td style="color:var(--muted)">2.1.4</td><td>Таблица аккаунтов: логин, email, прокси, статус, уровень</td><td><span class="p0">P0</span></td></tr>
+            <tr><td style="color:var(--muted)">2.1.5</td><td>Разбивка аккаунтов по группам (CRUD групп, bulk-назначение)</td><td><span class="p1">P1</span></td></tr>
+            <tr><td style="color:var(--muted)">2.1.6</td><td>AES-256 шифрование всех данных аккаунтов</td><td><span class="p1">P1</span></td></tr>
+            <tr><td style="color:var(--muted)">2.1.7</td><td>Облачная синхронизация аккаунтов (отключаемо)</td><td><span class="p1">P1</span></td></tr>
+            <tr><td style="color:var(--muted)">2.1.8</td><td>Открыть аккаунт в браузере с автологином (Playwright)</td><td><span class="p1">P1</span></td></tr>
+            <tr><td style="color:var(--muted)">2.1.9</td><td>Добавление прокси из файла / вручную, проверка работоспособности</td><td><span class="p0">P0</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- REG -->
+    <section id="reg">
+      <div class="section-header">
+        <div class="section-icon">📝</div>
+        <div>
+          <div class="section-title">Модуль: Регистрация аккаунтов</div>
+          <div class="section-sub">hCaptcha, SMS, профиль</div>
+        </div>
+      </div>
+      <div class="card">
+        <table>
+          <thead><tr><th>#</th><th>Требование</th><th>Приоритет</th></tr></thead>
+          <tbody>
+            <tr><td style="color:var(--muted)">2.2.1</td><td>Авторегистрация Steam-аккаунтов через Playwright</td><td><span class="p0">P0</span></td></tr>
+            <tr><td style="color:var(--muted)">2.2.2</td><td>Решение hCaptcha: AI (Claude/Gemini) + fallback (2captcha)</td><td><span class="p0">P0</span></td></tr>
+            <tr><td style="color:var(--muted)">2.2.3</td><td>SMS-верификация через активаторы (5sim, sms-activate)</td><td><span class="p0">P0</span></td></tr>
+            <tr><td style="color:var(--muted)">2.2.4</td><td>Генерация случайных данных профиля (имя, аватар)</td><td><span class="p1">P1</span></td></tr>
+            <tr><td style="color:var(--muted)">2.2.5</td><td>Настройка региона и языка при регистрации</td><td><span class="p1">P1</span></td></tr>
+            <tr><td style="color:var(--muted)">2.2.6</td><td>Автосохранение maFile после регистрации</td><td><span class="p0">P0</span></td></tr>
+            <tr><td style="color:var(--muted)">2.2.7</td><td>UI: прогресс, статус, лог для каждого аккаунта</td><td><span class="p0">P0</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ASF -->
+    <section id="asf">
+      <div class="section-header">
+        <div class="section-icon">🤖</div>
+        <div>
+          <div class="section-title">Модуль: ASF Боты</div>
+          <div class="section-sub">Встроенный ArchiSteamFarm без ручных конфигов</div>
+        </div>
+      </div>
+      <div class="card">
+        <table>
+          <thead><tr><th>#</th><th>Требование</th><th>Приоритет</th></tr></thead>
+          <tbody>
+            <tr><td style="color:var(--muted)">2.3.1</td><td>Встроенный запуск ASF (subprocess), без ручных конфигов</td><td><span class="p0">P0</span></td></tr>
+            <tr><td style="color:var(--muted)">2.3.2</td><td>Создание ASF-ботов в 2 клика из списка аккаунтов</td><td><span class="p0">P0</span></td></tr>
+            <tr><td style="color:var(--muted)">2.3.3</td><td>Авторезолв 2FA через maFile (SteamGuard код)</td><td><span class="p0">P0</span></td></tr>
+            <tr><td style="color:var(--muted)">2.3.4</td><td>IPC-связь панели с ASF (команды, статусы)</td><td><span class="p0">P0</span></td></tr>
+            <tr><td style="color:var(--muted)">2.3.5</td><td>Мастер-аккаунт для Family Sharing</td><td><span class="p1">P1</span></td></tr>
+            <tr><td style="color:var(--muted)">2.3.6</td><td>Быстрые действия: фарм часов/карточек, активация ключа, смена ника</td><td><span class="p0">P0</span></td></tr>
+            <tr><td style="color:var(--muted)">2.3.7</td><td>Настройки приватности аккаунта через ASF</td><td><span class="p1">P1</span></td></tr>
+            <tr><td style="color:var(--muted)">2.3.8</td><td>ASF Консоль (raw команды) для продвинутых пользователей</td><td><span class="p2">P2</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- WARMUP -->
+    <section id="warmup">
+      <div class="section-header">
+        <div class="section-icon">🔥</div>
+        <div>
+          <div class="section-title">Модуль: Прогрев — Бейджи</div>
+          <div class="section-sub">Community Leader Badge, 2 уровень профиля</div>
+        </div>
+      </div>
+      <div class="card">
+        <table>
+          <thead><tr><th>#</th><th>Требование</th><th>Приоритет</th></tr></thead>
+          <tbody>
+            <tr><td style="color:var(--muted)">2.4.1</td><td>Автовыполнение Community Leader badge (21+ квест)</td><td><span class="p0">P0</span></td></tr>
+            <tr><td style="color:var(--muted)">2.4.2</td><td>Целевое время выполнения одного аккаунта: ~4 минуты</td><td><span class="p0">P0</span></td></tr>
+            <tr><td style="color:var(--muted)">2.4.3</td><td>Выбор и валидация мастер-аккаунта (открытый профиль, скриншот, комменты)</td><td><span class="p0">P0</span></td></tr>
+            <tr><td style="color:var(--muted)">2.4.4</td><td>Массовый запуск для выбранных аккаунтов (очередь + concurrency)</td><td><span class="p0">P0</span></td></tr>
+            <tr><td style="color:var(--muted)">2.4.5</td><td>Автоматическое получение 2 уровня профиля</td><td><span class="p0">P0</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- FARMING -->
+    <section id="farming">
+      <div class="section-header">
+        <div class="section-icon">⏱️</div>
+        <div>
+          <div class="section-title">Модуль: Фарм часов</div>
+          <div class="section-sub">Ручной и умный режим, имитация живого поведения</div>
+        </div>
+      </div>
+      <div class="card">
+        <table>
+          <thead><tr><th>#</th><th>Требование</th><th>Приоритет</th></tr></thead>
+          <tbody>
+            <tr><td style="color:var(--muted)">2.5.1</td><td>Ручной режим: выбор игр + количество часов через ASF</td><td><span class="p0">P0</span></td></tr>
+            <tr><td style="color:var(--muted)">2.5.2</td><td>Умный режим: расписание активности, имитация живого игрока</td><td><span class="p0">P0</span></td></tr>
+            <tr><td style="color:var(--muted)">2.5.3</td><td>Пресет бесплатных популярных игр (F2P список)</td><td><span class="p1">P1</span></td></tr>
+            <tr><td style="color:var(--muted)">2.5.4</td><td>Интервал времени активности (с X по Y часов суток)</td><td><span class="p1">P1</span></td></tr>
+            <tr><td style="color:var(--muted)">2.5.5</td><td>Рандомные перерывы (имитация человека)</td><td><span class="p1">P1</span></td></tr>
+            <tr><td style="color:var(--muted)">2.5.6</td><td>Поддержка CS2, TF2, Dota 2 и любых тайтлов (по AppID)</td><td><span class="p0">P0</span></td></tr>
+            <tr><td style="color:var(--muted)">2.5.7</td><td>Авто-добавление игры в библиотеку если отсутствует</td><td><span class="p1">P1</span></td></tr>
+            <tr><td style="color:var(--muted)">2.5.8</td><td>Фарм карточек (для аккаунтов с купленными играми)</td><td><span class="p1">P1</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ACHIEVEMENTS -->
+    <section id="achieve">
+      <div class="section-header">
+        <div class="section-icon">🏆</div>
+        <div>
+          <div class="section-title">Модуль: Достижения</div>
+        </div>
+      </div>
+      <div class="card">
+        <table>
+          <thead><tr><th>#</th><th>Требование</th><th>Приоритет</th></tr></thead>
+          <tbody>
+            <tr><td style="color:var(--muted)">2.6.1</td><td>Выбор игры → выбор достижений → разлочить (SAM-подобный механизм)</td><td><span class="p0">P0</span></td></tr>
+            <tr><td style="color:var(--muted)">2.6.2</td><td>Массовое применение на несколько аккаунтов</td><td><span class="p1">P1</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- LEVELS -->
+    <section id="levels">
+      <div class="section-header">
+        <div class="section-icon">⭐</div>
+        <div>
+          <div class="section-title">Модуль: Повышение уровней</div>
+          <div class="section-sub">Донор-аккаунт, крафт бейджей, автораздача</div>
+        </div>
+      </div>
+      <div class="card">
+        <table>
+          <thead><tr><th>#</th><th>Требование</th><th>Приоритет</th></tr></thead>
+          <tbody>
+            <tr><td style="color:var(--muted)">2.7.1</td><td>Донор-аккаунт (хранилка карточек)</td><td><span class="p0">P0</span></td></tr>
+            <tr><td style="color:var(--muted)">2.7.2</td><td>Анализ: сколько наборов есть / сколько нужно для целевого уровня</td><td><span class="p0">P0</span></td></tr>
+            <tr><td style="color:var(--muted)">2.7.3</td><td>Авторасчёт и раздача наборов по выбранным аккаунтам</td><td><span class="p0">P0</span></td></tr>
+            <tr><td style="color:var(--muted)">2.7.4</td><td>Автокрафт бейджей (Steam badge crafting API)</td><td><span class="p0">P0</span></td></tr>
+            <tr><td style="color:var(--muted)">2.7.5</td><td>Задание целевого уровня пользователем</td><td><span class="p0">P0</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- LOOTER -->
+    <section id="looter">
+      <div class="section-header">
+        <div class="section-icon">📦</div>
+        <div>
+          <div class="section-title">Модуль: Лутер</div>
+          <div class="section-sub">Перенос инвентаря, просмотр в реальном времени</div>
+        </div>
+      </div>
+      <div class="card">
+        <table>
+          <thead><tr><th>#</th><th>Требование</th><th>Приоритет</th></tr></thead>
+          <tbody>
+            <tr><td style="color:var(--muted)">2.8.1</td><td>Перенос всего инвентаря на мастер-аккаунт (автотрейды)</td><td><span class="p0">P0</span></td></tr>
+            <tr><td style="color:var(--muted)">2.8.2</td><td>Фильтрация по игре: CS2, TF2, Dota2, Steam</td><td><span class="p0">P0</span></td></tr>
+            <tr><td style="color:var(--muted)">2.8.3</td><td>Просмотр инвентаря в реальном времени</td><td><span class="p1">P1</span></td></tr>
+            <tr><td style="color:var(--muted)">2.8.4</td><td>Отображение статуса предметов: tradeable / non-tradeable</td><td><span class="p1">P1</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- WALLET -->
+    <section id="wallet">
+      <div class="section-header">
+        <div class="section-icon">💳</div>
+        <div>
+          <div class="section-title">Модуль: Пополнение кошелька</div>
+        </div>
+      </div>
+      <div class="card">
+        <table>
+          <thead><tr><th>#</th><th>Требование</th><th>Приоритет</th></tr></thead>
+          <tbody>
+            <tr><td style="color:var(--muted)">2.9.1</td><td>Прямое пополнение Steam-кошелька (UAH/KZ/RU)</td><td><span class="p0">P0</span></td></tr>
+            <tr><td style="color:var(--muted)">2.9.2</td><td>Массовое пополнение: выбрал аккаунты → ввёл сумму → готово</td><td><span class="p0">P0</span></td></tr>
+            <tr><td style="color:var(--muted)">2.9.3</td><td>Активация gift card кодов (другие регионы)</td><td><span class="p1">P1</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- SCHEDULER -->
+    <section id="scheduler">
+      <div class="section-header">
+        <div class="section-icon">📅</div>
+        <div>
+          <div class="section-title">Модуль: Планировщик задач</div>
+        </div>
+      </div>
+      <div class="card">
+        <table>
+          <thead><tr><th>#</th><th>Требование</th><th>Приоритет</th></tr></thead>
+          <tbody>
+            <tr><td style="color:var(--muted)">2.10.1</td><td>Создание задач с расписанием (cron-like, APScheduler)</td><td><span class="p1">P1</span></td></tr>
+            <tr><td style="color:var(--muted)">2.10.2</td><td>Очередь задач с приоритетами и retry-логикой</td><td><span class="p1">P1</span></td></tr>
+            <tr><td style="color:var(--muted)">2.10.3</td><td>Уведомления о завершении задач (в UI)</td><td><span class="p1">P1</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- MARKET + SAAS -->
+    <section id="market">
+      <div class="section-header">
+        <div class="section-icon">🛒</div>
+        <div>
+          <div class="section-title">Модуль: Маркетплейс и SaaS</div>
+          <div class="section-sub">Покупки, подписки, кошелёк, поддержка</div>
+        </div>
+      </div>
+      <div class="card">
+        <table>
+          <thead><tr><th>#</th><th>Требование</th><th>Приоритет</th></tr></thead>
+          <tbody>
+            <tr><td style="color:var(--muted)">2.11.1</td><td>Каталог маркета: прогретые акки, автореги, коды пополнения</td><td><span class="p1">P1</span></td></tr>
+            <tr><td style="color:var(--muted)">2.11.2</td><td>Заказы: список, скачать архивом, копировать</td><td><span class="p1">P1</span></td></tr>
+            <tr><td style="color:var(--muted)">2.11.3</td><td>Автодобавление купленных аккаунтов в панель</td><td><span class="p1">P1</span></td></tr>
+            <tr><td style="color:var(--muted)">2.11.4</td><td>Кошелёк пользователя: крипто-пополнение (хэш → авто-зачисление)</td><td><span class="p1">P1</span></td></tr>
+            <tr><td style="color:var(--muted)">2.11.5</td><td>История транзакций</td><td><span class="p1">P1</span></td></tr>
+            <tr><td style="color:var(--muted)">2.11.6</td><td>Подписки: планы, HWID-проверка, срок действия</td><td><span class="p0">P0</span></td></tr>
+            <tr><td style="color:var(--muted)">2.11.7</td><td>Тикет-система поддержки (встроенный чат)</td><td><span class="p1">P1</span></td></tr>
+            <tr><td style="color:var(--muted)">2.11.8</td><td>Дашборд: streak, метрики аккаунтов, быстрый доступ</td><td><span class="p1">P1</span></td></tr>
+            <tr><td style="color:var(--muted)">2.11.9</td><td>Внутренняя валюта за ежедневную серию (streak)</td><td><span class="p2">P2</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- TEAM -->
+    <section id="team">
+      <div class="section-header">
+        <div class="section-icon">👥</div>
+        <div>
+          <div class="section-title">Команда разработки</div>
+          <div class="section-sub">Распределение ответственности</div>
+        </div>
+      </div>
+      <div class="dev-legend">
+        <div class="dev-card d1">
+          <div class="dev-name d1">● Dev 1 — Опытный</div>
+          <div class="dev-role">Senior разработчик · Архитектор · Tech Lead</div>
+          <div>
+            <span class="dev-skill">Python Backend</span>
+            <span class="dev-skill">FastAPI / asyncio</span>
+            <span class="dev-skill">Steam API</span>
+            <span class="dev-skill">ASF Integration</span>
+            <span class="dev-skill">Playwright</span>
+            <span class="dev-skill">Captcha AI</span>
+            <span class="dev-skill">Шифрование</span>
+            <span class="dev-skill">Архитектура</span>
+            <span class="dev-skill">Cloud API</span>
+            <span class="dev-skill">Подписки / Auth</span>
+          </div>
+        </div>
+        <div class="dev-card d2">
+          <div class="dev-name d2">● Dev 2 — Новичок</div>
+          <div class="dev-role">Junior разработчик · Frontend · UI/UX</div>
+          <div>
+            <span class="dev-skill">HTML/CSS</span>
+            <span class="dev-skill">React (обучение)</span>
+            <span class="dev-skill">Tailwind CSS</span>
+            <span class="dev-skill">Electron IPC</span>
+            <span class="dev-skill">UI компоненты</span>
+            <span class="dev-skill">Таблицы / Формы</span>
+            <span class="dev-skill">Локализация</span>
+            <span class="dev-skill">Документация</span>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">Принципы разделения задач</div>
+        <div style="font-size:13px; color:var(--muted); line-height:2;">
+          • <span class="dev1-tag">Dev 1</span> — вся бизнес-логика, интеграции, безопасность, сложные алгоритмы<br>
+          • <span class="dev2-tag">Dev 2</span> — UI-компоненты, вёрстка, простые формы, тестирование интерфейса<br>
+          • Dev 1 делает API-эндпоинты, Dev 2 подключает их в UI через готовые хуки<br>
+          • Code review: Dev 1 проверяет весь код Dev 2 перед мёржем<br>
+          • Еженедельное ревью прогресса, Dev 1 ментором для Dev 2
+        </div>
+      </div>
+    </section>
+
+    <!-- ROADMAP -->
+    <section id="roadmap">
+      <div class="section-header">
+        <div class="section-icon">🗺️</div>
+        <div>
+          <div class="section-title">Роадмап — 20 недель</div>
+          <div class="section-sub">Задачи расписаны по разработчикам</div>
+        </div>
+      </div>
+
+      <div class="mvp-banner">
+        <div class="mvp-icon">🚀</div>
+        <div>
+          <div class="mvp-title">MVP — готов к концу Фазы 4 (неделя 11)</div>
+          <div class="mvp-desc">Авторег + ASF без конфигов + Прогрев (бейджи + часы) — достаточно для первых платящих пользователей</div>
+        </div>
+      </div>
+
+      <!-- PHASE 0 -->
+      <div class="phase ph0">
+        <div class="phase-header">
+          <div class="phase-left">
+            <div class="phase-num">0</div>
+            <div class="phase-info">
+              <div class="name">Фундамент</div>
+              <div class="weeks">Проект, архитектура, UI-каркас, аутентификация</div>
+            </div>
+          </div>
+          <div class="phase-right">
+            <span class="phase-weeks-badge">Недели 1–2</span>
+          </div>
+        </div>
+        <div class="phase-body">
+          <table>
+            <thead><tr><th>#</th><th>Задача</th><th>Кто</th><th>Срок</th></tr></thead>
+            <tbody>
+              <tr><td style="color:var(--muted)">0.1</td><td>Выбор стека, инициализация Electron + React + Vite проекта</td><td><span class="dev1-tag">Dev 1</span></td><td>День 1–2</td></tr>
+              <tr><td style="color:var(--muted)">0.2</td><td>Структура папок, ESLint, Prettier, git workflow (branches, PRs)</td><td><span class="dev1-tag">Dev 1</span></td><td>День 2–3</td></tr>
+              <tr><td style="color:var(--muted)">0.3</td><td>Python FastAPI backend: базовая структура, SQLite, migrations</td><td><span class="dev1-tag">Dev 1</span></td><td>День 3–7</td></tr>
+              <tr><td style="color:var(--muted)">0.4</td><td>IPC-мост Electron ↔ Python (localhost REST)</td><td><span class="dev1-tag">Dev 1</span></td><td>День 5–8</td></tr>
+              <tr><td style="color:var(--muted)">0.5</td><td>Auth: регистрация/логин пользователя, JWT, HWID fingerprint</td><td><span class="dev1-tag">Dev 1</span></td><td>День 7–12</td></tr>
+              <tr><td style="color:var(--muted)">0.6</td><td>Тёмная тема, цветовая палитра, базовые UI-компоненты (Button, Table, Modal)</td><td><span class="dev2-tag">Dev 2</span></td><td>День 3–8</td></tr>
+              <tr><td style="color:var(--muted)">0.7</td><td>Боковое меню, роутинг между вкладками, пустые страницы</td><td><span class="dev2-tag">Dev 2</span></td><td>День 8–12</td></tr>
+              <tr><td style="color:var(--muted)">0.8</td><td>UI страницы логина/регистрации</td><td><span class="dev2-tag">Dev 2</span></td><td>День 10–14</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- PHASE 1 -->
+      <div class="phase ph1">
+        <div class="phase-header">
+          <div class="phase-left">
+            <div class="phase-num">1</div>
+            <div class="phase-info">
+              <div class="name">Аккаунты и Прокси</div>
+              <div class="weeks">Импорт, управление, группировка, шифрование</div>
+            </div>
+          </div>
+          <div class="phase-right">
+            <span class="phase-weeks-badge">Недели 3–4</span>
+          </div>
+        </div>
+        <div class="phase-body">
+          <table>
+            <thead><tr><th>#</th><th>Задача</th><th>Кто</th><th>Срок</th></tr></thead>
+            <tbody>
+              <tr><td style="color:var(--muted)">1.1</td><td>Парсер TXT (login:pass), обработка BOM, валидация</td><td><span class="dev1-tag">Dev 1</span></td><td>День 1–2</td></tr>
+              <tr><td style="color:var(--muted)">1.2</td><td>Импорт maFiles: одиночный + папка, привязка к логину</td><td><span class="dev1-tag">Dev 1</span></td><td>День 2–4</td></tr>
+              <tr><td style="color:var(--muted)">1.3</td><td>Модуль прокси: парсинг, проверка ping, round-robin привязка</td><td><span class="dev1-tag">Dev 1</span></td><td>День 3–6</td></tr>
+              <tr><td style="color:var(--muted)">1.4</td><td>AES-256 шифрование данных аккаунтов (Fernet)</td><td><span class="dev1-tag">Dev 1</span></td><td>День 5–7</td></tr>
+              <tr><td style="color:var(--muted)">1.5</td><td>API эндпоинты: CRUD аккаунтов, групп, прокси</td><td><span class="dev1-tag">Dev 1</span></td><td>День 6–10</td></tr>
+              <tr><td style="color:var(--muted)">1.6</td><td>Открытие аккаунта в браузере (Playwright auto-login)</td><td><span class="dev1-tag">Dev 1</span></td><td>День 10–14</td></tr>
+              <tr><td style="color:var(--muted)">1.7</td><td>UI импорта: drag-and-drop зона, file picker, preview таблица</td><td><span class="dev2-tag">Dev 2</span></td><td>День 1–5</td></tr>
+              <tr><td style="color:var(--muted)">1.8</td><td>Таблица аккаунтов: колонки, сортировка, чекбоксы, поиск</td><td><span class="dev2-tag">Dev 2</span></td><td>День 5–10</td></tr>
+              <tr><td style="color:var(--muted)">1.9</td><td>UI групп: создание, редактирование, назначение аккаунтов</td><td><span class="dev2-tag">Dev 2</span></td><td>День 8–14</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- PHASE 2 -->
+      <div class="phase ph2">
+        <div class="phase-header">
+          <div class="phase-left">
+            <div class="phase-num">2</div>
+            <div class="phase-info">
+              <div class="name">Регистрация аккаунтов</div>
+              <div class="weeks">hCaptcha AI, SMS, профиль, maFile</div>
+            </div>
+          </div>
+          <div class="phase-right">
+            <span class="phase-weeks-badge">Недели 5–6</span>
+          </div>
+        </div>
+        <div class="phase-body">
+          <table>
+            <thead><tr><th>#</th><th>Задача</th><th>Кто</th><th>Срок</th></tr></thead>
+            <tbody>
+              <tr><td style="color:var(--muted)">2.1</td><td>Рефакторинг steamreg.py под новую архитектуру (async)</td><td><span class="dev1-tag">Dev 1</span></td><td>День 1–3</td></tr>
+              <tr><td style="color:var(--muted)">2.2</td><td>Captcha pipeline: hcaptcha-challenger + Claude API + fallback (2captcha)</td><td><span class="dev1-tag">Dev 1</span></td><td>День 3–8</td></tr>
+              <tr><td style="color:var(--muted)">2.3</td><td>SMS-верификация: интеграция 5sim/sms-activate API</td><td><span class="dev1-tag">Dev 1</span></td><td>День 5–9</td></tr>
+              <tr><td style="color:var(--muted)">2.4</td><td>Генератор профиля: случайные имена, аватары, регион</td><td><span class="dev1-tag">Dev 1</span></td><td>День 7–10</td></tr>
+              <tr><td style="color:var(--muted)">2.5</td><td>Автосохранение maFile + добавление акка в базу</td><td><span class="dev1-tag">Dev 1</span></td><td>День 9–12</td></tr>
+              <tr><td style="color:var(--muted)">2.6</td><td>UI регистрации: настройки запуска, кол-во аккаунтов, SMS-сервис</td><td><span class="dev2-tag">Dev 2</span></td><td>День 1–5</td></tr>
+              <tr><td style="color:var(--muted)">2.7</td><td>UI прогресса: live-лог, статус каждого акка, progress bar</td><td><span class="dev2-tag">Dev 2</span></td><td>День 5–12</td></tr>
+              <tr><td style="color:var(--muted)">2.8</td><td>UI настроек captcha-сервисов (выбор провайдера, API ключи)</td><td><span class="dev2-tag">Dev 2</span></td><td>День 10–14</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- PHASE 3 -->
+      <div class="phase ph3">
+        <div class="phase-header">
+          <div class="phase-left">
+            <div class="phase-num">3</div>
+            <div class="phase-info">
+              <div class="name">ASF Интеграция</div>
+              <div class="weeks">Встроенный ASF, 2FA, IPC, быстрые действия</div>
+            </div>
+          </div>
+          <div class="phase-right">
+            <span class="phase-weeks-badge">Недели 7–8</span>
+          </div>
+        </div>
+        <div class="phase-body">
+          <table>
+            <thead><tr><th>#</th><th>Задача</th><th>Кто</th><th>Срок</th></tr></thead>
+            <tbody>
+              <tr><td style="color:var(--muted)">3.1</td><td>ASF subprocess менеджер: запуск, стоп, мониторинг процесса</td><td><span class="dev1-tag">Dev 1</span></td><td>День 1–3</td></tr>
+              <tr><td style="color:var(--muted)">3.2</td><td>Автогенерация bot-конфигов из аккаунтов панели (bot.json)</td><td><span class="dev1-tag">Dev 1</span></td><td>День 2–5</td></tr>
+              <tr><td style="color:var(--muted)">3.3</td><td>Авторезолв 2FA: maFile → SteamGuard код → передача в ASF</td><td><span class="dev1-tag">Dev 1</span></td><td>День 3–6</td></tr>
+              <tr><td style="color:var(--muted)">3.4</td><td>IPC-клиент: отправка команд ASF, получение статусов</td><td><span class="dev1-tag">Dev 1</span></td><td>День 5–9</td></tr>
+              <tr><td style="color:var(--muted)">3.5</td><td>Быстрые действия через IPC: фарм часов/карточек, активация ключей</td><td><span class="dev1-tag">Dev 1</span></td><td>День 8–12</td></tr>
+              <tr><td style="color:var(--muted)">3.6</td><td>Мастер-аккаунт Family Sharing (ASF конфиг)</td><td><span class="dev1-tag">Dev 1</span></td><td>День 11–13</td></tr>
+              <tr><td style="color:var(--muted)">3.7</td><td>UI вкладки ASF: список ботов, статусы online/offline, кнопки действий</td><td><span class="dev2-tag">Dev 2</span></td><td>День 1–6</td></tr>
+              <tr><td style="color:var(--muted)">3.8</td><td>UI модального окна "Создать ботов": выбор аккаунтов, кнопка Создать</td><td><span class="dev2-tag">Dev 2</span></td><td>День 5–8</td></tr>
+              <tr><td style="color:var(--muted)">3.9</td><td>UI дропдауна "Действия" с меню быстрых команд</td><td><span class="dev2-tag">Dev 2</span></td><td>День 7–10</td></tr>
+              <tr><td style="color:var(--muted)">3.10</td><td>ASF консоль: textarea ввода команд, вывод ответов</td><td><span class="dev2-tag">Dev 2</span></td><td>День 11–14</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- PHASE 4 -->
+      <div class="phase ph4">
+        <div class="phase-header">
+          <div class="phase-left">
+            <div class="phase-num">4</div>
+            <div class="phase-info">
+              <div class="name">Прогрев: Бейджи, Часы, Достижения</div>
+              <div class="weeks">Community Badge ~4 мин, умный фарм, SAM-достижения</div>
+            </div>
+          </div>
+          <div class="phase-right">
+            <span class="phase-weeks-badge">Недели 9–11</span>
+          </div>
+        </div>
+        <div class="phase-body">
+          <table>
+            <thead><tr><th>#</th><th>Задача</th><th>Кто</th><th>Срок</th></tr></thead>
+            <tbody>
+              <tr><td style="color:var(--muted)">4.1</td><td>Community Badge автоматизация (Playwright, 21 квест, &lt;5 мин)</td><td><span class="dev1-tag">Dev 1</span></td><td>День 1–6</td></tr>
+              <tr><td style="color:var(--muted)">4.2</td><td>Валидация мастер-аккаунта (профиль, скриншот, комменты)</td><td><span class="dev1-tag">Dev 1</span></td><td>День 4–7</td></tr>
+              <tr><td style="color:var(--muted)">4.3</td><td>Очередь массового запуска бейджей (concurrency limiter)</td><td><span class="dev1-tag">Dev 1</span></td><td>День 6–9</td></tr>
+              <tr><td style="color:var(--muted)">4.4</td><td>Умный фарм часов: APScheduler, рандомные перерывы, имитация поведения</td><td><span class="dev1-tag">Dev 1</span></td><td>День 8–14</td></tr>
+              <tr><td style="color:var(--muted)">4.5</td><td>Пресет F2P игр, авто-добавление игры в библиотеку</td><td><span class="dev1-tag">Dev 1</span></td><td>День 12–16</td></tr>
+              <tr><td style="color:var(--muted)">4.6</td><td>SAM-подобная разблокировка достижений (Steam API)</td><td><span class="dev1-tag">Dev 1</span></td><td>День 15–21</td></tr>
+              <tr><td style="color:var(--muted)">4.7</td><td>UI вкладки Бейджи: выбор мастера, список аккаунтов, кнопка Запустить</td><td><span class="dev2-tag">Dev 2</span></td><td>День 1–5</td></tr>
+              <tr><td style="color:var(--muted)">4.8</td><td>UI прогресса бейджей: live статус каждого, таймер</td><td><span class="dev2-tag">Dev 2</span></td><td>День 5–9</td></tr>
+              <tr><td style="color:var(--muted)">4.9</td><td>UI фарма часов: ручной/умный режим, выбор игр, настройка расписания</td><td><span class="dev2-tag">Dev 2</span></td><td>День 8–15</td></tr>
+              <tr><td style="color:var(--muted)">4.10</td><td>UI достижений: выбор игры, чекбоксы достижений, кнопка разлочить</td><td><span class="dev2-tag">Dev 2</span></td><td>День 14–21</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- PHASE 5 -->
+      <div class="phase ph5">
+        <div class="phase-header">
+          <div class="phase-left">
+            <div class="phase-num">5</div>
+            <div class="phase-info">
+              <div class="name">Лутер и Повышение уровней</div>
+              <div class="weeks">Trade offers, крафт бейджей, анализ карточек</div>
+            </div>
+          </div>
+          <div class="phase-right">
+            <span class="phase-weeks-badge">Недели 12–13</span>
+          </div>
+        </div>
+        <div class="phase-body">
+          <table>
+            <thead><tr><th>#</th><th>Задача</th><th>Кто</th><th>Срок</th></tr></thead>
+            <tbody>
+              <tr><td style="color:var(--muted)">5.1</td><td>Trade offer engine: автотрейды, 2FA подтверждение через maFile</td><td><span class="dev1-tag">Dev 1</span></td><td>День 1–5</td></tr>
+              <tr><td style="color:var(--muted)">5.2</td><td>Получение инвентаря аккаунта (steampy API), фильтры по игре</td><td><span class="dev1-tag">Dev 1</span></td><td>День 3–7</td></tr>
+              <tr><td style="color:var(--muted)">5.3</td><td>Анализ карточек донора: кол-во наборов, расчёт раздачи</td><td><span class="dev1-tag">Dev 1</span></td><td>День 6–9</td></tr>
+              <tr><td style="color:var(--muted)">5.4</td><td>Авторассылка наборов карточек + автокрафт бейджей</td><td><span class="dev1-tag">Dev 1</span></td><td>День 9–14</td></tr>
+              <tr><td style="color:var(--muted)">5.5</td><td>UI Лутера: выбор аккаунтов-источников, мастер, кнопки "Лутнуть всё/CS2/TF2"</td><td><span class="dev2-tag">Dev 2</span></td><td>День 1–7</td></tr>
+              <tr><td style="color:var(--muted)">5.6</td><td>UI просмотра инвентаря: grid карточек, tradeable badge</td><td><span class="dev2-tag">Dev 2</span></td><td>День 5–10</td></tr>
+              <tr><td style="color:var(--muted)">5.7</td><td>UI повышения уровней: донор, целевой уровень, анализ, кнопка старт</td><td><span class="dev2-tag">Dev 2</span></td><td>День 9–14</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- PHASE 6 -->
+      <div class="phase ph6">
+        <div class="phase-header">
+          <div class="phase-left">
+            <div class="phase-num">6</div>
+            <div class="phase-info">
+              <div class="name">Пополнение и Маркетплейс</div>
+              <div class="weeks">Прямое пополнение, каталог, заказы, кошелёк</div>
+            </div>
+          </div>
+          <div class="phase-right">
+            <span class="phase-weeks-badge">Недели 14–15</span>
+          </div>
+        </div>
+        <div class="phase-body">
+          <table>
+            <thead><tr><th>#</th><th>Задача</th><th>Кто</th><th>Срок</th></tr></thead>
+            <tbody>
+              <tr><td style="color:var(--muted)">6.1</td><td>Интеграция с поставщиком пополнения (UAH/KZ/RU) — API</td><td><span class="dev1-tag">Dev 1</span></td><td>День 1–5</td></tr>
+              <tr><td style="color:var(--muted)">6.2</td><td>Активация gift card кодов (Steam API)</td><td><span class="dev1-tag">Dev 1</span></td><td>День 4–7</td></tr>
+              <tr><td style="color:var(--muted)">6.3</td><td>Backend маркета: товары, заказы, автодоставка</td><td><span class="dev1-tag">Dev 1</span></td><td>День 5–10</td></tr>
+              <tr><td style="color:var(--muted)">6.4</td><td>Кошелёк: крипто webhook, авто-зачисление по хэшу</td><td><span class="dev1-tag">Dev 1</span></td><td>День 8–14</td></tr>
+              <tr><td style="color:var(--muted)">6.5</td><td>UI пополнения: выбор аккаунтов, сумма, кнопка пополнить</td><td><span class="dev2-tag">Dev 2</span></td><td>День 1–5</td></tr>
+              <tr><td style="color:var(--muted)">6.6</td><td>UI маркета: каталог товаров, карточки, фильтры</td><td><span class="dev2-tag">Dev 2</span></td><td>День 4–9</td></tr>
+              <tr><td style="color:var(--muted)">6.7</td><td>UI заказов: таблица, кнопки скачать/копировать/в панель</td><td><span class="dev2-tag">Dev 2</span></td><td>День 8–12</td></tr>
+              <tr><td style="color:var(--muted)">6.8</td><td>UI кошелька: баланс, QR-код, хэш-поле, история транзакций</td><td><span class="dev2-tag">Dev 2</span></td><td>День 10–14</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- PHASE 7 -->
+      <div class="phase ph7">
+        <div class="phase-header">
+          <div class="phase-left">
+            <div class="phase-num">7</div>
+            <div class="phase-info">
+              <div class="name">Планировщик, Подписки, Поддержка</div>
+              <div class="weeks">SaaS: планы, тикеты, дашборд, streak</div>
+            </div>
+          </div>
+          <div class="phase-right">
+            <span class="phase-weeks-badge">Недели 16–17</span>
+          </div>
+        </div>
+        <div class="phase-body">
+          <table>
+            <thead><tr><th>#</th><th>Задача</th><th>Кто</th><th>Срок</th></tr></thead>
+            <tbody>
+              <tr><td style="color:var(--muted)">7.1</td><td>Планировщик задач (APScheduler): cron-задачи, очередь, retry</td><td><span class="dev1-tag">Dev 1</span></td><td>День 1–5</td></tr>
+              <tr><td style="color:var(--muted)">7.2</td><td>Система подписок: планы, HWID-проверка, онлайн-активация</td><td><span class="dev1-tag">Dev 1</span></td><td>День 4–9</td></tr>
+              <tr><td style="color:var(--muted)">7.3</td><td>Тикет-система: backend (создание, ответы, статусы)</td><td><span class="dev1-tag">Dev 1</span></td><td>День 8–12</td></tr>
+              <tr><td style="color:var(--muted)">7.4</td><td>Дашборд метрики: аггрегация данных (часы, уровни, задачи)</td><td><span class="dev1-tag">Dev 1</span></td><td>День 11–14</td></tr>
+              <tr><td style="color:var(--muted)">7.5</td><td>UI планировщика: создание задач, расписание, список очереди</td><td><span class="dev2-tag">Dev 2</span></td><td>День 1–6</td></tr>
+              <tr><td style="color:var(--muted)">7.6</td><td>UI подписок: планы, цены, кнопка купить, статус подписки</td><td><span class="dev2-tag">Dev 2</span></td><td>День 5–9</td></tr>
+              <tr><td style="color:var(--muted)">7.7</td><td>UI тикетов: форма создания, список тикетов, чат ответов</td><td><span class="dev2-tag">Dev 2</span></td><td>День 8–12</td></tr>
+              <tr><td style="color:var(--muted)">7.8</td><td>UI дашборда: streak-карточка, метрики, быстрые кнопки</td><td><span class="dev2-tag">Dev 2</span></td><td>День 11–14</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- PHASE 8 -->
+      <div class="phase ph8">
+        <div class="phase-header">
+          <div class="phase-left">
+            <div class="phase-num">8</div>
+            <div class="phase-info">
+              <div class="name">Полировка и Релиз</div>
+              <div class="weeks">QA, оптимизация, installer, бета, публичный релиз</div>
+            </div>
+          </div>
+          <div class="phase-right">
+            <span class="phase-weeks-badge">Недели 18–20</span>
+          </div>
+        </div>
+        <div class="phase-body">
+          <table>
+            <thead><tr><th>#</th><th>Задача</th><th>Кто</th><th>Срок</th></tr></thead>
+            <tbody>
+              <tr><td style="color:var(--muted)">8.1</td><td>Профилирование и оптимизация: asyncio, memory leaks, concurrency</td><td><span class="dev1-tag">Dev 1</span></td><td>Нед. 18</td></tr>
+              <tr><td style="color:var(--muted)">8.2</td><td>NSIS installer + electron-builder, auto-update (Squirrel)</td><td><span class="dev1-tag">Dev 1</span></td><td>Нед. 19</td></tr>
+              <tr><td style="color:var(--muted)">8.3</td><td>Финальные баг-фиксы по результатам бета-теста</td><td><span class="dev1-tag">Dev 1</span></td><td>Нед. 19–20</td></tr>
+              <tr><td style="color:var(--muted)">8.4</td><td>Ручное QA тестирование всех модулей</td><td><span class="dev2-tag">Dev 2</span></td><td>Нед. 18</td></tr>
+              <tr><td style="color:var(--muted)">8.5</td><td>Документация пользователя: гайды внутри панели (tooltips, FAQ)</td><td><span class="dev2-tag">Dev 2</span></td><td>Нед. 18–19</td></tr>
+              <tr><td style="color:var(--muted)">8.6</td><td>UI полировка: анимации, empty states, error states, уведомления</td><td><span class="dev2-tag">Dev 2</span></td><td>Нед. 18–19</td></tr>
+              <tr><td style="color:var(--muted)">8.7</td><td>Закрытое бета-тестирование (10–20 пользователей)</td><td><span class="dev1-tag">Dev 1</span> <span class="dev2-tag">Dev 2</span></td><td>Нед. 20</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+    </section>
+
+    <!-- RISKS -->
+    <section id="risks">
+      <div class="section-header">
+        <div class="section-icon">⚠️</div>
+        <div>
+          <div class="section-title">Риски и митигация</div>
+        </div>
+      </div>
+      <div class="card">
+        <table>
+          <thead><tr><th>Риск</th><th>Уровень</th><th>Митигация</th></tr></thead>
+          <tbody>
+            <tr>
+              <td>Бан аккаунтов Steam</td>
+              <td><span class="risk-high">Высокий</span></td>
+              <td>Ротация прокси, имитация живого поведения, умные задержки</td>
+            </tr>
+            <tr>
+              <td>Изменение Steam API / страниц</td>
+              <td><span class="risk-high">Высокий</span></td>
+              <td>Абстракция клиента, мониторинг изменений, быстрые патчи</td>
+            </tr>
+            <tr>
+              <td>Изменение hCaptcha</td>
+              <td><span class="risk-med">Средний</span></td>
+              <td>Мультипровайдер: Claude + Gemini + 2captcha fallback</td>
+            </tr>
+            <tr>
+              <td>Утечка данных аккаунтов</td>
+              <td><span class="risk-high">Высокий</span></td>
+              <td>AES-256 шифрование, опциональный offline-режим</td>
+            </tr>
+            <tr>
+              <td>Dev 2 не справляется с задачами</td>
+              <td><span class="risk-med">Средний</span></td>
+              <td>Dev 1 выделяет простые задачи, проводит code review, менторство</td>
+            </tr>
+            <tr>
+              <td>Задержки в разработке</td>
+              <td><span class="risk-med">Средний</span></td>
+              <td>P2-фичи отрезаются, MVP выпускается по плану</td>
+            </tr>
+            <tr>
+              <td>Конкуренты выпустят похожий продукт</td>
+              <td><span class="risk-low">Низкий</span></td>
+              <td>Акцент на UX, скорость, встроенный маркет — дифференциация</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <div style="height:40px;"></div>
+
+  </div>
+</div>
+
+<script>
+  // Highlight active nav item on scroll
+  const sections = document.querySelectorAll('section[id]');
+  const navItems = document.querySelectorAll('.nav-item');
+
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        navItems.forEach(item => item.classList.remove('active'));
+        const active = document.querySelector(`.nav-item[href="#${entry.target.id}"]`);
+        if (active) active.classList.add('active');
+      }
+    });
+  }, { threshold: 0.3, rootMargin: '-80px 0px -50% 0px' });
+
+  sections.forEach(s => observer.observe(s));
+</script>
+
+</body>
+</html>

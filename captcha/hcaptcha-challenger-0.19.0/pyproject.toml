@@ -1,0 +1,119 @@
+# https://packaging.python.org/en/latest/guides/writing-pyproject-toml/#dependencies-optional-dependencies
+[project]
+name = "hcaptcha-challenger"
+version = "0.19.0"
+dependencies = [
+    "playwright",
+    "opencv-python>=4.11.0.88,<5.0",
+    "pillow>=11.1.0",
+    "msgpack>=1.1.1,<2.0.0",
+    "typer>=0.20.0",
+    "matplotlib>=3.10.3",
+    "google-genai>=1.56.0",
+    "pytz>=2025.2",
+    "httpx[http2]>=0.28.1",
+    "loguru>=0.7.3",
+    "pydantic-settings>=2.11.0",
+]
+requires-python = ">=3.10"
+authors = [
+    { name = "QIN2DIM", email = "yaoqinse@gmail.com" },
+    { name = "Bingjie Yan", email = "bj.yan.pa@qq.com" }
+]
+description = "🥂 Gracefully face hCaptcha challenge with multimodal large language model."
+readme = "README.md"
+license = "GPL-3.0-or-later"
+keywords = ["hcaptcha", "hcaptcha-challenger", "hcaptcha-solver", "agent", "large language model"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Image Processing",
+    "Topic :: Scientific/Engineering :: Image Recognition",
+    "Topic :: Software Development",
+]
+
+[project.urls]
+Homepage = "https://github.com/QIN2DIM/hcaptcha-challenger"
+Documentation = "https://github.com/QIN2DIM/hcaptcha-challenger"
+Repository = "https://github.com/QIN2DIM/hcaptcha-challenger.git"
+Issues = "https://github.com/QIN2DIM/hcaptcha-challenger/issues"
+Changelog = "https://github.com/QIN2DIM/hcaptcha-challenger/blob/master/CHANGELOG.md"
+
+[project.optional-dependencies]
+server = [
+    "fastapi[all]>=0.115.12",
+]
+dataset = [
+    "typer"
+]
+camoufox = [
+    "camoufox[geoip]>=0.4.11",
+]
+
+[project.scripts]
+hc = "hcaptcha_challenger.cli.main:main"
+
+# https://packaging.python.org/en/latest/key_projects/#hatch
+# https://hatch.pypa.io/latest/config/build/#build-system
+[build-system]
+requires = ["hatchling", "uv-dynamic-versioning"]
+build-backend = "hatchling.build"
+
+# https://hatch.pypa.io/latest/config/build/#explicit-selection
+[tool.hatch.build.targets.sdist]
+only-include = ["src/hcaptcha_challenger"]
+exclude = [
+    "archive/*.py",
+    'tests/',
+    'docker/',
+    'examples/'
+]
+
+# https://hatch.pypa.io/latest/config/build/#packages
+[tool.hatch.build.targets.wheel]
+packages = ["src/hcaptcha_challenger"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "examples"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+filterwarnings = "ignore::DeprecationWarning"
+
+[tool.black]
+line-length = 100
+target-version = ["py310", "py311", "py312", "py313"]
+skip-string-normalization = true
+exclude = "archive|.venv|docs/.*\\.ipynb"
+
+[tool.hatch.version]
+source = "uv-dynamic-versioning"
+
+[tool.uv-dynamic-versioning]
+vcs = "git"
+style = "pep440"
+bump = true
+
+[tool.ruff]
+exclude = ["archive/", "*.ipynb"]
+
+[dependency-groups]
+dev = [
+    "black[jupyter]>=25.1.0",
+    "ipykernel>=6.30.1",
+    "ipywidgets>=8.1.7",
+    "jupyterlab-language-pack-zh-cn>=4.4.post3",
+    "notebook>=7.5.1",
+    "pip>=25.2",
+    "pytest>=8.4.1",
+    "pytest-asyncio>=1.1.0",
+    "ruff>=0.12.9",
+    "ty>=0.0.5",
+    "uv-dynamic-versioning>=0.10.0",
+]
