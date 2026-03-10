@@ -7,8 +7,8 @@ Available solvers:
 - find_line_endpoints: OpenCV solver for "click on line ends" captcha type
 """
 
-from captcha.challenger_wrapper import ChallengerSolver
-from captcha.hcaptcha_solver import HCaptchaSolver
-from captcha.solve_line_ends import find_line_endpoints
+from .challenger_wrapper import ChallengerSolver
+from .hcaptcha_solver import HCaptchaSolver
+from .solve_line_ends import find_line_endpoints
 
 __all__ = ["ChallengerSolver", "HCaptchaSolver", "find_line_endpoints"]

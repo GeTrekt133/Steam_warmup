@@ -1,0 +1,30 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: steam_panel_db
+    environment:
+      POSTGRES_DB: steam_panel
+      POSTGRES_USER: steam
+      POSTGRES_PASSWORD: steam_dev_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+    restart: unless-stopped
+
+  cloud-api-stub:
+    build: ./api-stub
+    container_name: steam_panel_cloud
+    ports:
+      - "8421:8421"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://steam:steam_dev_password@postgres:5432/steam_panel
+    depends_on:
+      - postgres
+    restart: unless-stopped
+
+volumes:
+  pgdata:

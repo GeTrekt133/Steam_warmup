@@ -1,0 +1,31 @@
+# Web framework
+fastapi==0.115.*
+uvicorn[standard]==0.34.*
+
+# Database
+sqlalchemy[asyncio]==2.0.*
+aiosqlite==0.20.*
+asyncpg==0.30.*
+alembic==1.14.*
+
+# Settings
+pydantic-settings==2.7.*
+
+# Auth
+python-jose[cryptography]==3.3.*
+bcrypt==5.*
+
+# Encryption
+cryptography==44.*
+
+# HTTP client
+httpx==0.28.*
+
+# Captcha module dependencies
+playwright==1.49.*
+requests==2.32.*
+opencv-python==4.11.*
+numpy==2.2.*
+PyJWT==2.10.*
+tls_client==1.0.*
+groq==0.15.*
