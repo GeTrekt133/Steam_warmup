@@ -1,34 +1,213 @@
 @import "tailwindcss";
 
 :root {
-  --background: 240 10% 3.9%;
-  --foreground: 0 0% 98%;
-  --card: 240 10% 3.9%;
-  --card-foreground: 0 0% 98%;
-  --popover: 240 10% 3.9%;
-  --popover-foreground: 0 0% 98%;
-  --primary: 0 0% 98%;
-  --primary-foreground: 240 5.9% 10%;
-  --secondary: 240 3.7% 15.9%;
-  --secondary-foreground: 0 0% 98%;
-  --muted: 240 3.7% 15.9%;
-  --muted-foreground: 240 5% 64.9%;
-  --accent: 240 3.7% 15.9%;
-  --accent-foreground: 0 0% 98%;
-  --destructive: 0 62.8% 30.6%;
-  --destructive-foreground: 0 0% 98%;
-  --border: 240 3.7% 15.9%;
-  --input: 240 3.7% 15.9%;
-  --ring: 240 4.9% 83.9%;
+  /* Discord-inspired dark theme with unique purple-blue accent */
+
+  /* Backgrounds — от самого тёмного к светлому */
+  --background: 225 9% 9%;           /* #141619 — основной фон (как Discord) */
+  --background-secondary: 225 9% 12%; /* #1b1d21 — вторичный фон */
+  --background-tertiary: 225 9% 7%;   /* #101114 — самый тёмный (sidebar) */
+
+  /* Card / Surface */
+  --card: 225 9% 13%;                 /* #1e2024 — карточки, панели */
+  --card-foreground: 210 17% 95%;     /* #f0f2f5 */
+
+  /* Popover (модалки, дропдауны) */
+  --popover: 225 9% 11%;              /* #191b1f */
+  --popover-foreground: 210 17% 95%;
+
+  /* Text */
+  --foreground: 210 17% 95%;          /* #f0f2f5 — основной текст */
+  --muted: 225 7% 20%;                /* #2f3136 — muted bg */
+  --muted-foreground: 215 8% 55%;     /* #8a8d93 — вторичный текст */
+
+  /* Accent — уникальный фиолетово-синий */
+  --primary: 235 70% 60%;             /* #5865F2 → сдвинут к #4752c4 — наш акцент */
+  --primary-foreground: 0 0% 100%;    /* белый текст на акценте */
+
+  /* Secondary */
+  --secondary: 225 7% 18%;            /* #2b2d31 */
+  --secondary-foreground: 210 17% 90%;
+
+  /* Accent (hover, выделения) */
+  --accent: 225 7% 16%;               /* #262729 */
+  --accent-foreground: 210 17% 95%;
+
+  /* Success / Warning / Destructive */
+  --success: 145 65% 42%;             /* #23a55a — зелёный Discord */
+  --success-foreground: 0 0% 100%;
+  --warning: 38 95% 60%;              /* #f0b132 — жёлтый */
+  --warning-foreground: 0 0% 8%;
+  --destructive: 0 70% 50%;           /* #da373c — красный */
+  --destructive-foreground: 0 0% 100%;
+
+  /* Borders */
+  --border: 225 7% 16%;               /* #27282c — тонкие разделители */
+  --border-strong: 225 7% 22%;        /* #353639 — заметные границы */
+  --input: 225 7% 18%;                /* бордер инпутов */
+
+  /* Focus ring */
+  --ring: 235 70% 60%;                /* совпадает с primary */
+
+  /* Radius */
   --radius: 0.5rem;
-  --sidebar-background: 240 5.9% 10%;
-  --sidebar-foreground: 240 4.8% 95.9%;
-  --sidebar-primary: 224.3 76.3% 48%;
+
+  /* Sidebar */
+  --sidebar-background: 225 9% 7%;    /* #101114 — как background-tertiary */
+  --sidebar-foreground: 210 17% 90%;
+  --sidebar-primary: 235 70% 60%;
   --sidebar-primary-foreground: 0 0% 100%;
-  --sidebar-accent: 240 3.7% 15.9%;
-  --sidebar-accent-foreground: 240 4.8% 95.9%;
-  --sidebar-border: 240 3.7% 15.9%;
-  --sidebar-ring: 217.2 91.2% 59.8%;
+  --sidebar-accent: 225 7% 14%;       /* #222427 — hover/active пункт */
+  --sidebar-accent-foreground: 210 17% 95%;
+  --sidebar-border: 225 7% 13%;
+  --sidebar-ring: 235 70% 60%;
+}
+
+/* ===== Dark Green — тёмная тема с зелёным акцентом ===== */
+[data-theme="dark-green"] {
+  --background: 150 8% 8%;
+  --background-secondary: 150 8% 11%;
+  --background-tertiary: 150 8% 6%;
+
+  --card: 150 8% 12%;
+  --card-foreground: 140 15% 95%;
+
+  --popover: 150 8% 10%;
+  --popover-foreground: 140 15% 95%;
+
+  --foreground: 140 15% 95%;
+  --muted: 150 6% 19%;
+  --muted-foreground: 150 6% 55%;
+
+  --primary: 145 65% 42%;           /* зелёный акцент */
+  --primary-foreground: 0 0% 100%;
+
+  --secondary: 150 6% 17%;
+  --secondary-foreground: 140 15% 90%;
+
+  --accent: 150 6% 15%;
+  --accent-foreground: 140 15% 95%;
+
+  --success: 145 65% 42%;
+  --success-foreground: 0 0% 100%;
+  --warning: 38 95% 60%;
+  --warning-foreground: 0 0% 8%;
+  --destructive: 0 70% 50%;
+  --destructive-foreground: 0 0% 100%;
+
+  --border: 150 6% 15%;
+  --border-strong: 150 6% 21%;
+  --input: 150 6% 17%;
+
+  --ring: 145 65% 42%;
+  --radius: 0.5rem;
+
+  --sidebar-background: 150 8% 6%;
+  --sidebar-foreground: 140 15% 90%;
+  --sidebar-primary: 145 65% 42%;
+  --sidebar-primary-foreground: 0 0% 100%;
+  --sidebar-accent: 150 6% 13%;
+  --sidebar-accent-foreground: 140 15% 95%;
+  --sidebar-border: 150 6% 12%;
+  --sidebar-ring: 145 65% 42%;
+}
+
+/* ===== Dark Red — тёмная тема с красным акцентом ===== */
+[data-theme="dark-red"] {
+  --background: 0 0% 7%;              /* #121212 */
+  --background-secondary: 0 0% 9%;    /* #171717 */
+  --background-tertiary: 0 0% 5%;     /* #0d0d0d */
+
+  --card: 0 0% 10%;                   /* #1a1a1a */
+  --card-foreground: 0 0% 93%;        /* #ededed */
+
+  --popover: 0 0% 8%;
+  --popover-foreground: 0 0% 93%;
+
+  --foreground: 0 0% 93%;
+  --muted: 0 0% 16%;                  /* #292929 */
+  --muted-foreground: 0 0% 55%;       /* #8c8c8c */
+
+  --primary: 350 80% 55%;             /* #e63956 — красный акцент */
+  --primary-foreground: 0 0% 100%;
+
+  --secondary: 0 0% 14%;
+  --secondary-foreground: 0 0% 88%;
+
+  --accent: 0 0% 13%;
+  --accent-foreground: 0 0% 93%;
+
+  --success: 145 65% 42%;
+  --success-foreground: 0 0% 100%;
+  --warning: 38 95% 60%;
+  --warning-foreground: 0 0% 8%;
+  --destructive: 0 70% 50%;
+  --destructive-foreground: 0 0% 100%;
+
+  --border: 0 0% 14%;
+  --border-strong: 0 0% 20%;
+  --input: 0 0% 15%;
+
+  --ring: 350 80% 55%;
+  --radius: 0.5rem;
+
+  --sidebar-background: 0 0% 5%;
+  --sidebar-foreground: 0 0% 88%;
+  --sidebar-primary: 350 80% 55%;
+  --sidebar-primary-foreground: 0 0% 100%;
+  --sidebar-accent: 0 0% 11%;
+  --sidebar-accent-foreground: 0 0% 93%;
+  --sidebar-border: 0 0% 11%;
+  --sidebar-ring: 350 80% 55%;
+}
+
+/* ===== Light — полностью светлая тема ===== */
+[data-theme="light"] {
+  --background: 0 0% 98%;
+  --background-secondary: 0 0% 95%;
+  --background-tertiary: 0 0% 100%;
+
+  --card: 0 0% 100%;
+  --card-foreground: 224 10% 12%;
+
+  --popover: 0 0% 100%;
+  --popover-foreground: 224 10% 12%;
+
+  --foreground: 224 10% 12%;
+  --muted: 220 14% 96%;
+  --muted-foreground: 220 8% 46%;
+
+  --primary: 235 70% 55%;
+  --primary-foreground: 0 0% 100%;
+
+  --secondary: 220 14% 94%;
+  --secondary-foreground: 224 10% 20%;
+
+  --accent: 220 14% 92%;
+  --accent-foreground: 224 10% 12%;
+
+  --success: 145 65% 38%;
+  --success-foreground: 0 0% 100%;
+  --warning: 38 95% 55%;
+  --warning-foreground: 0 0% 8%;
+  --destructive: 0 70% 50%;
+  --destructive-foreground: 0 0% 100%;
+
+  --border: 220 13% 89%;
+  --border-strong: 220 13% 82%;
+  --input: 220 13% 87%;
+
+  --ring: 235 70% 55%;
+  --radius: 0.5rem;
+
+  --sidebar-background: 0 0% 100%;
+  --sidebar-foreground: 224 10% 20%;
+  --sidebar-primary: 235 70% 55%;
+  --sidebar-primary-foreground: 0 0% 100%;
+  --sidebar-accent: 220 14% 95%;
+  --sidebar-accent-foreground: 224 10% 12%;
+  --sidebar-border: 220 13% 89%;
+  --sidebar-ring: 235 70% 55%;
 }
 
 * {
@@ -41,22 +220,42 @@ body {
   color: hsl(var(--foreground));
   font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
   min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-/* Scrollbar styling */
+/* Selection */
+::selection {
+  background-color: hsl(var(--primary) / 0.3);
+  color: hsl(var(--foreground));
+}
+
+/* Scrollbar — тонкий, как в Discord */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 ::-webkit-scrollbar-track {
-  background: hsl(var(--background));
+  background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: hsl(var(--border));
+  background: hsl(var(--muted));
   border-radius: 3px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: hsl(var(--muted-foreground));
+  background: hsl(var(--muted-foreground) / 0.5);
+}
+
+/* Focus visible — кольцо вокруг интерактивных элементов */
+:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 2px;
+}
+
+/* GPU-рендеринг: предотвращает артефакты при hover/transition */
+*, *::before, *::after {
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
 }
 
 /* ── Utility classes for UI ── */

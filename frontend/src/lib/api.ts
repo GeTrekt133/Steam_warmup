@@ -6,6 +6,11 @@ declare global {
       getBackendUrl: () => string
       platform: string
       openFile: (options: object) => Promise<{ canceled: boolean; filePaths: string[] }>
+      openDirectory: (options?: object) => Promise<{ canceled: boolean; filePaths: string[] }>
+      readTextFile: (filePath: string) => Promise<string>
+      readDirectory: (dirPath: string) => Promise<{ name: string; path: string; isFile: boolean }[]>
+      readFile: (filePath: string) => Promise<string>
+      renameFile: (oldPath: string, newPath: string) => Promise<boolean>
     }
   }
 }
@@ -30,7 +35,8 @@ api.interceptors.response.use(
   (error) => {
     if (error.response?.status === 401) {
       localStorage.removeItem('auth_token')
-      window.location.hash = '#/login'
+      localStorage.removeItem('current_user')
+      window.location.href = '/login'
     }
     return Promise.reject(error)
   }

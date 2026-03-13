@@ -1,4 +1,4 @@
-import { HashRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { MainLayout } from '@/components/layout/MainLayout'
 import { DashboardPage } from '@/pages/DashboardPage'
 import { AccountsPage } from '@/pages/AccountsPage'
@@ -6,6 +6,7 @@ import { ProxiesPage } from '@/pages/ProxiesPage'
 import { RegistrationPage } from '@/pages/RegistrationPage'
 import { BotsPage } from '@/pages/BotsPage'
 import { WarmupPage } from '@/pages/WarmupPage'
+import { FarmPage } from '@/pages/FarmPage'
 import { FarmingPage } from '@/pages/FarmingPage'
 import { MarketplacePage } from '@/pages/MarketplacePage'
 import { SettingsPage } from '@/pages/SettingsPage'
@@ -13,9 +14,7 @@ import { LoginPage } from '@/pages/LoginPage'
 import { RegisterPage } from '@/pages/RegisterPage'
 
 /**
- * Auth guard — если нет JWT токена, редиректим на логин.
- * HashRouter используется потому что Electron грузит файлы через file://,
- * а BrowserRouter требует серверного роутинга.
+ * Auth guard — если нет токена, редиректим на логин.
  */
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const token = localStorage.getItem('auth_token')
@@ -27,7 +26,7 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 
 function App() {
   return (
-    <HashRouter>
+    <BrowserRouter>
       <Routes>
         {/* Public routes */}
         <Route path="/login" element={<LoginPage />} />
@@ -42,6 +41,7 @@ function App() {
           }
         >
           <Route path="/" element={<DashboardPage />} />
+          <Route path="/farm" element={<FarmPage />} />
           <Route path="/accounts" element={<AccountsPage />} />
           <Route path="/proxies" element={<ProxiesPage />} />
           <Route path="/registration" element={<RegistrationPage />} />
@@ -55,7 +55,7 @@ function App() {
         {/* Fallback */}
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
-    </HashRouter>
+    </BrowserRouter>
   )
 }
 
