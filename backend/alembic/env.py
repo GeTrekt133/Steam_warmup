@@ -18,7 +18,7 @@ from app.config import settings
 from app.database import Base
 
 # Импортируем все модели чтобы Alembic знал о них
-from app.models import User  # noqa: F401
+from app.models import User, Account, Proxy, AccountGroup  # noqa: F401
 
 config = context.config
 
