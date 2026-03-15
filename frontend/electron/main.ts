@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron'
 import { spawn, type ChildProcess } from 'child_process'
 import path from 'path'
 import fs from 'fs'
@@ -131,6 +131,12 @@ ipcMain.handle('fs:readFile', async (_event, filePath: string) => {
 // IPC: переименовать файл
 ipcMain.handle('fs:renameFile', async (_event, oldPath: string, newPath: string) => {
   fs.renameSync(oldPath, newPath)
+  return true
+})
+
+// IPC: открыть URL в системном браузере
+ipcMain.handle('shell:openExternal', async (_event, url: string) => {
+  await shell.openExternal(url)
   return true
 })
 

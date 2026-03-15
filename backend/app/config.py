@@ -38,7 +38,7 @@ class Settings(BaseSettings):
     # --- Auth (JWT) ---
     SECRET_KEY: str = secrets.token_urlsafe(64)
     JWT_ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440  # 24 часа
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 43200  # 30 дней (десктопное приложение)
 
     # --- Encryption (Fernet AES-256) ---
     FERNET_KEY: str = ""

@@ -83,6 +83,16 @@ async def delete_proxy(db: AsyncSession, proxy_id: int, owner_id: int) -> bool:
     return True
 
 
+async def delete_all_proxies(db: AsyncSession, owner_id: int) -> int:
+    """Удалить все прокси пользователя. Возвращает количество удалённых."""
+    from sqlalchemy import delete as sql_delete
+    result = await db.execute(
+        sql_delete(Proxy).where(Proxy.owner_id == owner_id)
+    )
+    await db.commit()
+    return result.rowcount
+
+
 # ── Парсинг ─────────────────────────────────────────────
 
 def parse_proxy_line(line: str) -> dict | None:

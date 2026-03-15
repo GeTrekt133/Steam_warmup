@@ -19,6 +19,7 @@ import {
   ShieldCheck,
   Pickaxe,
   Gift,
+  Plus,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -38,6 +39,8 @@ interface Account {
   isFarmed: boolean      // аккаунт зафармлен
   isDropCollected: boolean // дроп собран
   dropValue?: number     // сумма дропов в долларах
+  sharedSecret?: string  // shared_secret для Steam Guard
+  proxyId?: number       // ID привязанного прокси (из panel_proxies)
 }
 
 // ─── localStorage хранилище (пока нет backend) ───────────────
@@ -83,7 +86,15 @@ interface ContextMenuState {
 export function AccountsPage() {
   const [accounts, setAccounts] = useState<Account[]>(() => loadAccounts())
   const [search, setSearch] = useState('')
+  const [useProxies, setUseProxies] = useState(() => localStorage.getItem('accounts_use_proxies') === 'true')
+
+  // Сохраняем состояние тумблера прокси
+  useEffect(() => {
+    localStorage.setItem('accounts_use_proxies', String(useProxies))
+  }, [useProxies])
   const [showImportModal, setShowImportModal] = useState(false)
+  const [showAddMenu, setShowAddMenu] = useState(false)
+  const [showAddSingleModal, setShowAddSingleModal] = useState(false)
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const contextMenuTimeRef = useRef(0)
@@ -219,11 +230,66 @@ export function AccountsPage() {
     setContextMenu({ x: e.clientX, y: e.clientY, account })
   }
 
-  function handleOpenInBrowser(account: Account) {
+  async function handleOpenInBrowser(account: Account) {
     const ids = getTargetIds(account)
     const targets = accounts.filter((a) => ids.has(a.id))
-    for (const acc of targets) {
-      window.open(`https://steamcommunity.com/id/${acc.login}`, '_blank')
+
+    // Загружаем прокси из localStorage для привязки к аккаунту
+    let allProxies: { id: number; host: string; port: number; protocol: string; username: string | null; password: string | null }[] = []
+    try {
+      const raw = localStorage.getItem('panel_proxies')
+      if (raw) allProxies = JSON.parse(raw)
+    } catch { /* ignore */ }
+
+    for (let i = 0; i < targets.length; i++) {
+      const acc = targets[i]
+      try {
+        // Определяем прокси: если тумблер включен — берём из пула (round-robin), иначе по proxyId
+        let proxyData = null
+        if (useProxies && allProxies.length > 0) {
+          const px = acc.proxyId
+            ? allProxies.find((p) => p.id === acc.proxyId) || allProxies[i % allProxies.length]
+            : allProxies[i % allProxies.length]
+          proxyData = {
+            host: px.host,
+            port: px.port,
+            protocol: px.protocol || 'http',
+            username: px.username || null,
+            password: px.password || null,
+          }
+        } else if (acc.proxyId) {
+          const px = allProxies.find((p) => p.id === acc.proxyId)
+          if (px) {
+            proxyData = {
+              host: px.host,
+              port: px.port,
+              protocol: px.protocol || 'http',
+              username: px.username || null,
+              password: px.password || null,
+            }
+          }
+        }
+
+        console.log('[browser] sending request for', acc.login, proxyData ? 'with proxy' : 'no proxy')
+        const res = await fetch('http://127.0.0.1:8420/api/browser/open', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            login: acc.login,
+            password: acc.password,
+            shared_secret: acc.sharedSecret || null,
+            proxy: proxyData,
+          }),
+        })
+        const data = await res.json()
+        console.log('[browser] response:', res.status, data)
+        if (!res.ok) {
+          alert('Error: ' + (data.detail || 'Failed to open browser'))
+        }
+      } catch (e: any) {
+        console.error('[browser] error:', e)
+        alert('Network error: ' + e.message)
+      }
     }
     setContextMenu(null)
   }
@@ -320,6 +386,30 @@ export function AccountsPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {/* Тумблер прокси */}
+          <button
+            onClick={() => setUseProxies((v) => !v)}
+            className={cn(
+              'flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors border',
+              useProxies
+                ? 'bg-[hsl(var(--primary))]/15 border-[hsl(var(--primary))]/50 text-[hsl(var(--primary))]'
+                : 'bg-transparent border-[hsl(var(--border))] text-[hsl(var(--muted-foreground))]'
+            )}
+            title={useProxies ? 'Прокси включены — браузер будет открываться через прокси' : 'Прокси выключены'}
+          >
+            <Globe className="h-4 w-4" />
+            Прокси
+            <div className={cn(
+              'relative w-8 h-4 rounded-full transition-colors',
+              useProxies ? 'bg-[hsl(var(--primary))]' : 'bg-zinc-600'
+            )}>
+              <div className={cn(
+                'absolute top-0.5 h-3 w-3 rounded-full bg-white transition-transform',
+                useProxies ? 'translate-x-4' : 'translate-x-0.5'
+              )} />
+            </div>
+          </button>
+
           {selectedIds.size > 0 && (
             <Button
               variant="destructive"
@@ -330,14 +420,34 @@ export function AccountsPage() {
               Удалить выбранные ({selectedIds.size})
             </Button>
           )}
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setShowImportModal(true)}
-          >
-            <Upload className="h-4 w-4" />
-            Импорт
-          </Button>
+          <div className="relative">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowAddMenu((prev) => !prev)}
+            >
+              <Plus className="h-4 w-4" />
+              Добавить
+            </Button>
+            {showAddMenu && (
+              <div className="absolute right-0 top-full mt-1 z-50 min-w-[200px] rounded-lg border border-[hsl(var(--border-strong))] bg-[hsl(var(--card))] shadow-xl py-1">
+                <button
+                  onClick={() => { setShowAddMenu(false); setShowAddSingleModal(true) }}
+                  className="flex items-center gap-2.5 w-full px-3 py-2 text-sm text-left hover:bg-[hsl(var(--accent))] transition-colors"
+                >
+                  <Plus className="h-4 w-4 text-[hsl(var(--primary))]" />
+                  Добавить 1 аккаунт
+                </button>
+                <button
+                  onClick={() => { setShowAddMenu(false); setShowImportModal(true) }}
+                  className="flex items-center gap-2.5 w-full px-3 py-2 text-sm text-left hover:bg-[hsl(var(--accent))] transition-colors"
+                >
+                  <Upload className="h-4 w-4 text-[hsl(var(--primary))]" />
+                  Добавить несколько
+                </button>
+              </div>
+            )}
+          </div>
           <Button
             variant="destructive"
             size="sm"
@@ -524,8 +634,177 @@ export function AccountsPage() {
           />
         </ModalBody>
       </Modal>
+
+      {/* Модалка добавления одного аккаунта */}
+      <Modal
+        open={showAddSingleModal}
+        onClose={() => setShowAddSingleModal(false)}
+        className="max-w-md"
+      >
+        <ModalHeader onClose={() => setShowAddSingleModal(false)}>
+          Добавить аккаунт
+        </ModalHeader>
+        <ModalBody>
+          <AddSingleAccountForm
+            existingAccounts={accounts}
+            onDone={(acc) => {
+              setAccounts((prev) => {
+                const updated = [...prev, acc]
+                saveAccounts(updated)
+                return updated
+              })
+              setShowAddSingleModal(false)
+            }}
+            onCancel={() => setShowAddSingleModal(false)}
+          />
+        </ModalBody>
+      </Modal>
+
     </div>
   )
+}
+
+// ─── Steam Guard TOTP генератор ──────────────────────────────
+
+const STEAM_CHARS = '23456789BCDFGHJKMNPQRTVWXY'
+
+function generateSteamGuardCode(sharedSecret: string): string {
+  // Декодируем base64
+  const cleaned = sharedSecret.trim()
+  if (!cleaned) throw new Error('shared_secret пустой')
+  const binaryStr = atob(cleaned)
+  const key = new Uint8Array(binaryStr.length)
+  for (let i = 0; i < binaryStr.length; i++) {
+    key[i] = binaryStr.charCodeAt(i)
+  }
+
+  // Текущее время / 30 секунд
+  const time = Math.floor(Date.now() / 1000 / 30)
+
+  // 8-байтный буфер времени (big-endian)
+  const timeBytes = new Uint8Array(8)
+  let t = time
+  for (let i = 7; i >= 0; i--) {
+    timeBytes[i] = t & 0xff
+    t = Math.floor(t / 256)
+  }
+
+  // HMAC-SHA1 (синхронная реализация для простоты)
+  const hash = hmacSha1(key, timeBytes)
+
+  // Извлекаем 5 символов
+  const offset = hash[19] & 0x0f
+  let code = ((hash[offset] & 0x7f) << 24) |
+    ((hash[offset + 1] & 0xff) << 16) |
+    ((hash[offset + 2] & 0xff) << 8) |
+    (hash[offset + 3] & 0xff)
+
+  let result = ''
+  for (let i = 0; i < 5; i++) {
+    result += STEAM_CHARS[code % STEAM_CHARS.length]
+    code = Math.floor(code / STEAM_CHARS.length)
+  }
+  return result
+}
+
+// Простая реализация HMAC-SHA1
+function hmacSha1(key: Uint8Array, message: Uint8Array): Uint8Array {
+  const blockSize = 64
+
+  let k = key
+  if (k.length > blockSize) {
+    k = sha1(k)
+  }
+  if (k.length < blockSize) {
+    const padded = new Uint8Array(blockSize)
+    padded.set(k)
+    k = padded
+  }
+
+  const ipad = new Uint8Array(blockSize)
+  const opad = new Uint8Array(blockSize)
+  for (let i = 0; i < blockSize; i++) {
+    ipad[i] = k[i] ^ 0x36
+    opad[i] = k[i] ^ 0x5c
+  }
+
+  const inner = new Uint8Array(blockSize + message.length)
+  inner.set(ipad)
+  inner.set(message, blockSize)
+
+  const innerHash = sha1(inner)
+
+  const outer = new Uint8Array(blockSize + 20)
+  outer.set(opad)
+  outer.set(innerHash, blockSize)
+
+  return sha1(outer)
+}
+
+// SHA-1 реализация
+function sha1(data: Uint8Array): Uint8Array {
+  let h0 = 0x67452301
+  let h1 = 0xEFCDAB89
+  let h2 = 0x98BADCFE
+  let h3 = 0x10325476
+  let h4 = 0xC3D2E1F0
+
+  const msgLen = data.length
+  const bitLen = msgLen * 8
+
+  // Паддинг: после 0x80 + нули + 8 байт длины, total кратен 64
+  const padLen = (64 - ((msgLen + 9) % 64)) % 64
+  const totalLen = msgLen + 1 + padLen + 8
+  const padded = new Uint8Array(totalLen)
+  padded.set(data)
+  padded[msgLen] = 0x80
+
+  // Длина в битах (big-endian, 64-bit)
+  const view = new DataView(padded.buffer)
+  view.setUint32(totalLen - 4, bitLen, false)
+
+  const w = new Int32Array(80)
+
+  for (let offset = 0; offset < totalLen; offset += 64) {
+    for (let i = 0; i < 16; i++) {
+      w[i] = view.getInt32(offset + i * 4, false)
+    }
+    for (let i = 16; i < 80; i++) {
+      w[i] = rotl(w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16], 1)
+    }
+
+    let a = h0, b = h1, c = h2, d = h3, e = h4
+
+    for (let i = 0; i < 80; i++) {
+      let f: number, k: number
+      if (i < 20) { f = (b & c) | (~b & d); k = 0x5A827999 }
+      else if (i < 40) { f = b ^ c ^ d; k = 0x6ED9EBA1 }
+      else if (i < 60) { f = (b & c) | (b & d) | (c & d); k = 0x8F1BBCDC }
+      else { f = b ^ c ^ d; k = 0xCA62C1D6 }
+
+      const temp = (rotl(a, 5) + f + e + k + w[i]) | 0
+      e = d; d = c; c = rotl(b, 30); b = a; a = temp
+    }
+
+    h0 = (h0 + a) | 0
+    h1 = (h1 + b) | 0
+    h2 = (h2 + c) | 0
+    h3 = (h3 + d) | 0
+    h4 = (h4 + e) | 0
+  }
+
+  const result = new Uint8Array(20)
+  const rv = new DataView(result.buffer)
+  rv.setUint32(0, h0, false)
+  rv.setUint32(4, h1, false)
+  rv.setUint32(8, h2, false)
+  rv.setUint32(12, h3, false)
+  rv.setUint32(16, h4, false)
+  return result
+}
+
+function rotl(n: number, s: number): number {
+  return ((n << s) | (n >>> (32 - s))) | 0
 }
 
 // ─── Контекстное меню аккаунта ────────────────────────────────
@@ -604,10 +883,34 @@ function AccountContextMenu({
       onClick: () => copyToClipboard(allTargets.map((a) => `${a.login}:${a.password}`).join('\n'), 'loginpass'),
     },
     {
-      label: 'Копировать 2FA',
+      label: multi ? `Копировать Steam Guard (${allTargets.filter((a) => a.sharedSecret).length})` : 'Копировать Steam Guard код',
       icon: ShieldCheck,
-      onClick: () => copyToClipboard(allTargets.filter((a) => a.maFile).map((a) => a.login).join('\n'), '2fa'),
-      disabled: !allTargets.some((a) => a.maFile),
+      onClick: () => {
+        const targets = allTargets.filter((a) => a.sharedSecret)
+        if (targets.length === 1) {
+          // Для одного аккаунта копируем только код (без логина)
+          try {
+            const code = generateSteamGuardCode(targets[0].sharedSecret!)
+            copyToClipboard(code, '2fa')
+          } catch (e) {
+            console.error('Steam Guard error:', e)
+            copyToClipboard('Ошибка генерации кода', '2fa')
+          }
+        } else {
+          const codes = targets
+            .map((a) => {
+              try {
+                return `${a.login}: ${generateSteamGuardCode(a.sharedSecret!)}`
+              } catch (e) {
+                console.error('Steam Guard error for', a.login, ':', e)
+                return `${a.login}: ОШИБКА`
+              }
+            })
+            .join('\n')
+          copyToClipboard(codes, '2fa')
+        }
+      },
+      disabled: !allTargets.some((a) => a.sharedSecret),
     },
     { type: 'separator' },
     {
@@ -670,7 +973,11 @@ function AccountContextMenu({
           (item.label === 'Копировать логин' && copiedField === 'login') ||
           (item.label === 'Копировать пароль' && copiedField === 'password') ||
           (item.label === 'Копировать логин:пароль' && copiedField === 'loginpass') ||
-          (item.label === 'Копировать 2FA' && copiedField === '2fa')
+          (item.label === 'Копировать Steam Guard код' && copiedField === '2fa') ||
+          (item.label.startsWith('Копировать логины') && copiedField === 'login') ||
+          (item.label.startsWith('Копировать пароли') && copiedField === 'password') ||
+          (item.label.startsWith('Копировать логин:пароль') && copiedField === 'loginpass') ||
+          (item.label.startsWith('Копировать Steam Guard') && copiedField === '2fa')
 
         return (
           <button
@@ -818,6 +1125,9 @@ function ImportWizardContent({ onDone, onCancel, existingAccounts }: ImportWizar
             if (account) {
               account.maFile = true
               account.maFileName = accountName + '.maFile'
+              if (json.shared_secret) {
+                account.sharedSecret = json.shared_secret
+              }
               matched++
             }
           }
@@ -1020,6 +1330,112 @@ function ImportWizardContent({ onDone, onCancel, existingAccounts }: ImportWizar
         </div>
       )}
     </div>
+  )
+}
+
+// ─── Форма добавления одного аккаунта ────────────────────────
+
+function AddSingleAccountForm({
+  existingAccounts,
+  onDone,
+  onCancel,
+}: {
+  existingAccounts: Account[]
+  onDone: (account: Account) => void
+  onCancel: () => void
+}) {
+  const [login, setLogin] = useState('')
+  const [password, setPassword] = useState('')
+  const [sharedSecret, setSharedSecret] = useState('')
+  const [error, setError] = useState('')
+
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    setError('')
+
+    const trimmedLogin = login.trim()
+    const trimmedPassword = password.trim()
+    const trimmedSecret = sharedSecret.trim()
+
+    if (!trimmedLogin || !trimmedPassword) {
+      setError('Логин и пароль обязательны')
+      return
+    }
+
+    if (existingAccounts.some((a) => a.login.toLowerCase() === trimmedLogin.toLowerCase())) {
+      setError('Аккаунт с таким логином уже существует')
+      return
+    }
+
+    const account: Account = {
+      id: generateId(),
+      login: trimmedLogin,
+      password: trimmedPassword,
+      maFile: !!trimmedSecret,
+      addedAt: new Date().toISOString(),
+      status: 'waiting',
+      isFarmed: false,
+      isDropCollected: false,
+      sharedSecret: trimmedSecret || undefined,
+    }
+
+    onDone(account)
+  }
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-4">
+      <div>
+        <label className="block text-sm font-medium mb-1">Логин *</label>
+        <input
+          type="text"
+          value={login}
+          onChange={(e) => setLogin(e.target.value)}
+          placeholder="steam_login"
+          className="w-full rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[hsl(var(--ring))] placeholder:text-[hsl(var(--muted-foreground)/0.5)]"
+          autoFocus
+        />
+      </div>
+      <div>
+        <label className="block text-sm font-medium mb-1">Пароль *</label>
+        <input
+          type="text"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          placeholder="password123"
+          className="w-full rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[hsl(var(--ring))] placeholder:text-[hsl(var(--muted-foreground)/0.5)]"
+        />
+      </div>
+      <div>
+        <label className="block text-sm font-medium mb-1">Shared Secret</label>
+        <input
+          type="text"
+          value={sharedSecret}
+          onChange={(e) => setSharedSecret(e.target.value)}
+          placeholder="wGJfMHAHEh0DTYV8EFZfTdkGUbE="
+          className="w-full rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[hsl(var(--ring))] placeholder:text-[hsl(var(--muted-foreground)/0.5)]"
+        />
+        <p className="text-xs text-[hsl(var(--muted-foreground))] mt-1">
+          Необязательно. Если указан — аккаунт будет отмечен как имеющий 2FA
+        </p>
+      </div>
+
+      {error && (
+        <div className="text-sm text-[hsl(var(--destructive))] bg-[hsl(var(--destructive)/0.1)] border border-[hsl(var(--destructive)/0.2)] rounded-md px-3 py-2 flex items-center gap-2">
+          <AlertCircle className="h-4 w-4 flex-shrink-0" />
+          {error}
+        </div>
+      )}
+
+      <div className="flex justify-end gap-2 pt-2">
+        <Button type="button" variant="ghost" onClick={onCancel}>
+          Отмена
+        </Button>
+        <Button type="submit">
+          <Plus className="h-4 w-4" />
+          Добавить
+        </Button>
+      </div>
+    </form>
   )
 }
 

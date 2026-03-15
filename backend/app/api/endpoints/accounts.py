@@ -25,7 +25,7 @@ from app.schemas.account import (
     AccountImportResult,
 )
 from app.services import account_service
-from app.services.steam_browser import open_steam_browser
+from app.services.steam_browser import open_steam_browser_raw_from_db
 from app.services.steam_guard import get_code_with_ttl
 from app.services.encryption import decrypt
 
@@ -181,8 +181,8 @@ async def open_browser(
         )
         proxy = result.scalar_one_or_none()
 
-    # Запускаем браузер в фоновой задаче (не блокируем API)
-    asyncio.create_task(open_steam_browser(account, proxy))
+    # Запускаем браузер в отдельном потоке (не блокируем API)
+    open_steam_browser_raw_from_db(account, proxy)
 
     return {
         "status": "launched",

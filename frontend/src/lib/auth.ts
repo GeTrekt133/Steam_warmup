@@ -1,5 +1,7 @@
-// Локальная авторизация через localStorage
-// Пользователи хранятся в localStorage, пароли хешируются через SHA-256
+// Авторизация: локальная + backend (JWT)
+// Регистрация/логин сначала на backend, fallback на локальную
+
+import api from '@/lib/api'
 
 interface StoredUser {
   username: string
@@ -33,10 +35,30 @@ async function hashPassword(password: string): Promise<string> {
   return hashArray.map(b => b.toString(16).padStart(2, '0')).join('')
 }
 
-// Генерация простого токена
-function generateToken(username: string): string {
+// Генерация простого токена (fallback если backend недоступен)
+function generateLocalToken(username: string): string {
   const payload = btoa(JSON.stringify({ username, ts: Date.now() }))
   return `local_${payload}`
+}
+
+// Попытка зарегистрировать на backend и получить JWT
+async function backendRegister(username: string, password: string): Promise<string | null> {
+  try {
+    const res = await api.post('/api/auth/register', { username, password })
+    return res.data.access_token ?? null
+  } catch {
+    return null
+  }
+}
+
+// Попытка залогиниться на backend и получить JWT
+async function backendLogin(username: string, password: string): Promise<string | null> {
+  try {
+    const res = await api.post('/api/auth/login', { username, password })
+    return res.data.access_token ?? null
+  } catch {
+    return null
+  }
 }
 
 export function getCurrentUser(): string | null {
@@ -58,8 +80,13 @@ export async function registerUser(username: string, password: string): Promise<
   })
   saveUsers(users)
 
-  // Автоматически входим после регистрации
-  const token = generateToken(username)
+  // Пытаемся зарегистрировать на backend (для JWT)
+  let token = await backendRegister(username, password)
+  if (!token) {
+    // Backend недоступен — используем локальный токен
+    token = generateLocalToken(username)
+  }
+
   localStorage.setItem(TOKEN_KEY, token)
   localStorage.setItem(CURRENT_USER_KEY, username)
 
@@ -79,7 +106,20 @@ export async function loginUser(username: string, password: string): Promise<{ s
     return { success: false, error: 'Неверный пароль' }
   }
 
-  const token = generateToken(username)
+  // Пытаемся получить JWT от backend
+  let token = await backendLogin(username, password)
+  if (!token) {
+    // Backend не знает пользователя — регистрируем и логинимся
+    token = await backendRegister(username, password)
+    if (!token) {
+      token = await backendLogin(username, password)
+    }
+  }
+  if (!token) {
+    // Backend недоступен — используем локальный токен
+    token = generateLocalToken(username)
+  }
+
   localStorage.setItem(TOKEN_KEY, token)
   localStorage.setItem(CURRENT_USER_KEY, username)
 

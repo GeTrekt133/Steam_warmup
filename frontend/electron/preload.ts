@@ -13,4 +13,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   readDirectory: (dirPath: string) => ipcRenderer.invoke('fs:readDirectory', dirPath),
   readFile: (filePath: string) => ipcRenderer.invoke('fs:readFile', filePath),
   renameFile: (oldPath: string, newPath: string) => ipcRenderer.invoke('fs:renameFile', oldPath, newPath),
+
+  // Открыть URL в системном браузере
+  openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url),
 })

@@ -1,8 +1,7 @@
 import { useEffect, useState, useCallback } from 'react'
-import api from '@/lib/api'
 import {
-  Globe, Plus, Upload, Trash2, RefreshCw, Zap,
-  Search, X, ChevronLeft, ChevronRight, Check, XCircle,
+  Globe, Plus, Upload, Trash2, RefreshCw,
+  X, ChevronLeft, ChevronRight, Check, XCircle,
 } from 'lucide-react'
 
 interface Proxy {
@@ -11,18 +10,117 @@ interface Proxy {
   port: number
   protocol: string
   username: string | null
-  is_alive: boolean
+  password: string | null
+  is_alive: boolean | null
   ping_ms: number | null
   last_checked_at: string | null
-  country: string | null
   created_at: string
 }
 
 type Modal = null | 'create' | 'import-txt'
 
+const STORAGE_KEY = 'panel_proxies'
+const LIMIT = 100
+
+function loadFromStorage(): Proxy[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY)
+    return raw ? JSON.parse(raw) : []
+  } catch {
+    return []
+  }
+}
+
+function saveToStorage(proxies: Proxy[]) {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(proxies))
+}
+
+let nextId = Date.now()
+function genId(): number {
+  return nextId++
+}
+
+/** Парсинг строки прокси в объект. Поддерживаемые форматы:
+ *  - host:port
+ *  - host:port:user:pass
+ *  - protocol://host:port
+ *  - protocol://user:pass@host:port
+ */
+function parseProxyLine(line: string): Proxy | null {
+  line = line.trim()
+  if (!line || line.startsWith('#')) return null
+
+  let protocol = 'http'
+  let host = ''
+  let port = 0
+  let username: string | null = null
+  let password: string | null = null
+
+  // protocol://...
+  const protoMatch = line.match(/^(https?|socks[45]?):\/\/(.+)$/i)
+  if (protoMatch) {
+    protocol = protoMatch[1].toLowerCase()
+    line = protoMatch[2]
+  }
+
+  // user:pass@host:port
+  const atIdx = line.lastIndexOf('@')
+  if (atIdx !== -1) {
+    const auth = line.slice(0, atIdx)
+    const rest = line.slice(atIdx + 1)
+    const authParts = auth.split(':')
+    username = authParts[0] || null
+    password = authParts.slice(1).join(':') || null
+    const [h, p] = rest.split(':')
+    host = h
+    port = parseInt(p)
+  } else {
+    // host:port or host:port:user:pass
+    const parts = line.split(':')
+    if (parts.length >= 2) {
+      host = parts[0]
+      port = parseInt(parts[1])
+      if (parts.length >= 4) {
+        username = parts[2] || null
+        password = parts[3] || null
+      }
+    }
+  }
+
+  if (!host || !port || isNaN(port)) return null
+
+  return {
+    id: genId(),
+    host,
+    port,
+    protocol,
+    username,
+    password,
+    is_alive: null,
+    ping_ms: null,
+    last_checked_at: null,
+    created_at: new Date().toISOString(),
+  }
+}
+
+/** Проверка прокси — пытаемся подключиться через fetch с таймаутом */
+async function checkProxy(px: Proxy): Promise<{ alive: boolean; ping: number | null }> {
+  const start = performance.now()
+  try {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 10000)
+    const url = `${px.protocol}://${px.host}:${px.port}`
+    await fetch(url, { signal: controller.signal, mode: 'no-cors' })
+    clearTimeout(timeout)
+    const ping = Math.round(performance.now() - start)
+    return { alive: true, ping }
+  } catch {
+    return { alive: false, ping: null }
+  }
+}
+
 export function ProxiesPage() {
-  const [proxies, setProxies] = useState<Proxy[]>([])
-  const [total, setTotal] = useState(0)
+  const [allProxies, setAllProxies] = useState<Proxy[]>([])
   const [page, setPage] = useState(0)
   const [selected, setSelected] = useState<Set<number>>(new Set())
   const [modal, setModal] = useState<Modal>(null)
@@ -38,86 +136,144 @@ export function ProxiesPage() {
   const [importTxt, setImportTxt] = useState('')
   const [message, setMessage] = useState<{ text: string; type: 'ok' | 'err' } | null>(null)
 
-  const LIMIT = 100
+  // Загрузка из localStorage при монтировании
+  useEffect(() => {
+    const stored = loadFromStorage()
+    setAllProxies(stored)
+    // Инициализируем nextId чтобы не было коллизий
+    if (stored.length > 0) {
+      nextId = Math.max(...stored.map(p => p.id)) + 1
+    }
+  }, [])
 
-  const loadProxies = useCallback(async () => {
-    try {
-      const [list, cnt] = await Promise.all([
-        api.get('/api/proxies/', { params: { skip: page * LIMIT, limit: LIMIT } }),
-        api.get('/api/proxies/count'),
-      ])
-      setProxies(list.data)
-      setTotal(cnt.data.count)
-    } catch { /* ignore */ }
-  }, [page])
+  // Сохранение в localStorage при каждом изменении
+  const saveAndSet = useCallback((proxies: Proxy[]) => {
+    setAllProxies(proxies)
+    saveToStorage(proxies)
+  }, [])
 
-  useEffect(() => { loadProxies() }, [loadProxies])
+  const total = allProxies.length
+  const totalPages = Math.ceil(total / LIMIT)
+  const proxies = allProxies.slice(page * LIMIT, (page + 1) * LIMIT)
 
   const flash = (text: string, type: 'ok' | 'err' = 'ok') => {
     setMessage({ text, type })
     setTimeout(() => setMessage(null), 3000)
   }
 
-  const handleCreate = async () => {
+  const handleCreate = () => {
     if (!formHost || !formPort) return
-    setLoading(true)
-    try {
-      await api.post('/api/proxies/', {
-        host: formHost, port: parseInt(formPort), protocol: formProtocol,
-        username: formUser || undefined, password: formPass || undefined,
-      })
-      flash('Прокси добавлен')
-      setModal(null); setFormHost(''); setFormPort(''); setFormUser(''); setFormPass('')
-      loadProxies()
-    } catch (e: any) {
-      flash(e.response?.data?.detail || 'Ошибка', 'err')
-    } finally { setLoading(false) }
+    const px: Proxy = {
+      id: genId(),
+      host: formHost,
+      port: parseInt(formPort),
+      protocol: formProtocol,
+      username: formUser || null,
+      password: formPass || null,
+      is_alive: null,
+      ping_ms: null,
+      last_checked_at: null,
+      created_at: new Date().toISOString(),
+    }
+    saveAndSet([...allProxies, px])
+    flash('Прокси добавлен')
+    setModal(null)
+    setFormHost(''); setFormPort(''); setFormUser(''); setFormPass('')
   }
 
-  const handleImportTxt = async () => {
+  const handleImportTxt = () => {
     if (!importTxt.trim()) return
     setLoading(true)
-    try {
-      const r = await api.post('/api/proxies/import/txt', { content: importTxt })
-      flash(`Импортировано: ${r.data.imported}, пропущено: ${r.data.skipped}`)
-      setModal(null); setImportTxt('')
-      loadProxies()
-    } catch (e: any) {
-      flash(e.response?.data?.detail || 'Ошибка импорта', 'err')
-    } finally { setLoading(false) }
+    const lines = importTxt.split('\n')
+    let imported = 0
+    let skipped = 0
+    const newProxies = [...allProxies]
+
+    for (const line of lines) {
+      const px = parseProxyLine(line)
+      if (px) {
+        newProxies.push(px)
+        imported++
+      } else if (line.trim()) {
+        skipped++
+      }
+    }
+
+    saveAndSet(newProxies)
+    flash(`Импортировано: ${imported}, пропущено: ${skipped}`)
+    setModal(null)
+    setImportTxt('')
+    setLoading(false)
   }
 
   const handleCheckAll = async () => {
     setChecking(true)
-    try {
-      const r = await api.post('/api/proxies/check-all')
-      const alive = r.data.filter((p: any) => p.is_alive).length
-      flash(`Проверено: ${r.data.length}, живых: ${alive}`)
-      loadProxies()
-    } catch (e: any) {
-      flash(e.response?.data?.detail || 'Ошибка проверки', 'err')
-    } finally { setChecking(false) }
+    const updated = [...allProxies]
+    let alive = 0
+    for (let i = 0; i < updated.length; i++) {
+      const result = await checkProxy(updated[i])
+      updated[i] = {
+        ...updated[i],
+        is_alive: result.alive,
+        ping_ms: result.ping,
+        last_checked_at: new Date().toISOString(),
+      }
+      if (result.alive) alive++
+      // Обновляем UI каждые 5 проверок
+      if (i % 5 === 0) {
+        saveAndSet([...updated])
+      }
+    }
+    saveAndSet(updated)
+    flash(`Проверено: ${updated.length}, живых: ${alive}`)
+    setChecking(false)
   }
 
   const handleCheckSelected = async () => {
     if (!selected.size) return
     setChecking(true)
-    try {
-      const r = await api.post('/api/proxies/check', [...selected])
-      const alive = r.data.filter((p: any) => p.is_alive).length
-      flash(`Проверено: ${r.data.length}, живых: ${alive}`)
-      loadProxies()
-    } catch { flash('Ошибка проверки', 'err') }
-    finally { setChecking(false) }
+    const updated = [...allProxies]
+    let alive = 0
+    let checked = 0
+    for (let i = 0; i < updated.length; i++) {
+      if (!selected.has(updated[i].id)) continue
+      const result = await checkProxy(updated[i])
+      updated[i] = {
+        ...updated[i],
+        is_alive: result.alive,
+        ping_ms: result.ping,
+        last_checked_at: new Date().toISOString(),
+      }
+      if (result.alive) alive++
+      checked++
+      if (checked % 5 === 0) {
+        saveAndSet([...updated])
+      }
+    }
+    saveAndSet(updated)
+    flash(`Проверено: ${checked}, живых: ${alive}`)
+    setChecking(false)
   }
 
-  const handleDelete = async (id: number) => {
-    if (!confirm('Удалить прокси?')) return
-    try {
-      await api.delete(`/api/proxies/${id}`)
-      flash('Удалён')
-      loadProxies()
-    } catch { flash('Ошибка', 'err') }
+  const handleDelete = (id: number) => {
+    saveAndSet(allProxies.filter(p => p.id !== id))
+    flash('Удалён')
+  }
+
+  const handleDeleteSelected = () => {
+    if (!selected.size) return
+    if (!confirm(`Удалить ${selected.size} прокси?`)) return
+    saveAndSet(allProxies.filter(p => !selected.has(p.id)))
+    setSelected(new Set())
+    flash(`Удалено: ${selected.size}`)
+  }
+
+  const handleDeleteAll = () => {
+    if (!total) return
+    if (!confirm(`Удалить ВСЕ ${total} прокси?`)) return
+    saveAndSet([])
+    setSelected(new Set())
+    flash(`Удалено: ${total}`)
   }
 
   const toggleSelect = (id: number) => {
@@ -132,8 +288,6 @@ export function ProxiesPage() {
     if (selected.size === proxies.length) setSelected(new Set())
     else setSelected(new Set(proxies.map(p => p.id)))
   }
-
-  const totalPages = Math.ceil(total / LIMIT)
 
   return (
     <div className="p-6 flex flex-col h-full">
@@ -154,6 +308,14 @@ export function ProxiesPage() {
           <button onClick={selected.size > 0 ? handleCheckSelected : handleCheckAll} disabled={checking} className="btn-secondary">
             <RefreshCw size={16} className={checking ? 'animate-spin' : ''} />
             {checking ? 'Проверка...' : selected.size > 0 ? `Проверить (${selected.size})` : 'Проверить все'}
+          </button>
+          <button
+            onClick={selected.size > 0 ? handleDeleteSelected : handleDeleteAll}
+            disabled={loading || total === 0}
+            className="btn-secondary text-red-400 hover:text-red-300 hover:border-red-500/50"
+          >
+            <Trash2 size={16} />
+            {selected.size > 0 ? `Удалить (${selected.size})` : 'Удалить все'}
           </button>
         </div>
       </div>
@@ -196,11 +358,9 @@ export function ProxiesPage() {
                 </td>
                 <td className="td text-xs text-[hsl(var(--muted-foreground))]">{px.username || '—'}</td>
                 <td className="td text-center">
-                  {px.last_checked_at ? (
-                    px.is_alive ? <Check size={16} className="inline text-green-400" /> : <XCircle size={16} className="inline text-red-400" />
-                  ) : (
-                    <span className="text-[hsl(var(--muted-foreground))]">—</span>
-                  )}
+                  {px.is_alive === true && <Check size={16} className="inline text-green-400" />}
+                  {px.is_alive === false && <XCircle size={16} className="inline text-red-400" />}
+                  {px.is_alive === null && <span className="text-[hsl(var(--muted-foreground))]">—</span>}
                 </td>
                 <td className="td text-center font-mono text-xs">
                   {px.ping_ms != null ? `${px.ping_ms}ms` : '—'}
@@ -251,8 +411,8 @@ export function ProxiesPage() {
           </select>
           <input className="input w-full mb-3" placeholder="Логин (опц.)" value={formUser} onChange={e => setFormUser(e.target.value)} />
           <input className="input w-full mb-4" placeholder="Пароль (опц.)" type="password" value={formPass} onChange={e => setFormPass(e.target.value)} />
-          <button onClick={handleCreate} disabled={loading || !formHost || !formPort} className="btn-primary w-full">
-            {loading ? 'Создание...' : 'Добавить'}
+          <button onClick={handleCreate} disabled={!formHost || !formPort} className="btn-primary w-full">
+            Добавить
           </button>
         </ModalOverlay>
       )}
@@ -262,6 +422,28 @@ export function ProxiesPage() {
           <p className="text-xs text-[hsl(var(--muted-foreground))] mb-2">
             Форматы: host:port, host:port:user:pass, protocol://host:port, protocol://user:pass@host:port
           </p>
+
+          {/* Кнопка выбора файла */}
+          <label className="flex items-center justify-center gap-2 w-full px-4 py-3 mb-3 border-2 border-dashed border-[hsl(var(--border))] rounded-lg cursor-pointer hover:border-[hsl(var(--primary))] hover:bg-[hsl(var(--accent))] transition-colors">
+            <Upload size={18} className="text-[hsl(var(--muted-foreground))]" />
+            <span className="text-sm text-[hsl(var(--muted-foreground))]">Выбрать файл .txt</span>
+            <input
+              type="file"
+              accept=".txt"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0]
+                if (!file) return
+                const reader = new FileReader()
+                reader.onload = () => {
+                  setImportTxt(reader.result as string)
+                }
+                reader.readAsText(file, 'utf-8')
+                e.target.value = ''
+              }}
+            />
+          </label>
+
           <textarea
             className="input w-full h-48 mb-4 font-mono text-xs resize-none"
             placeholder={"1.2.3.4:8080\nsocks5://5.6.7.8:1080\n9.10.11.12:3128:user:pass"}

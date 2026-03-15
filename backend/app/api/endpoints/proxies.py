@@ -80,6 +80,16 @@ async def update_proxy(
     return proxy
 
 
+@router.post("/delete-all")
+async def delete_all_proxies(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Удалить все прокси пользователя."""
+    deleted = await proxy_service.delete_all_proxies(db, current_user.id)
+    return {"deleted": deleted}
+
+
 @router.delete("/{proxy_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_proxy(
     proxy_id: int,
