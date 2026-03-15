@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
-import { loginUser } from '@/lib/auth'
+import api from '@/lib/api'
 import { Button } from '@/components/ui/Button'
 
 export function LoginPage() {
@@ -16,14 +16,13 @@ export function LoginPage() {
     setLoading(true)
 
     try {
-      const result = await loginUser(username, password)
-      if (result.success) {
-        navigate('/')
-      } else {
-        setError(result.error ?? 'Ошибка входа')
-      }
-    } catch {
-      setError('Произошла ошибка при входе')
+      const res = await api.post('/api/auth/login', { username, password })
+      localStorage.setItem('auth_token', res.data.access_token)
+      localStorage.setItem('current_user', username)
+      navigate('/')
+    } catch (err: unknown) {
+      const axiosErr = err as { response?: { data?: { detail?: string } } }
+      setError(axiosErr.response?.data?.detail ?? 'Произошла ошибка при входе')
     } finally {
       setLoading(false)
     }

@@ -29,11 +29,13 @@ api.interceptors.request.use((config) => {
   return config
 })
 
-// При 401 — убираем токен и редиректим на логин
+// При 401 — убираем токен и редиректим на логин (кроме auth-эндпоинтов)
 api.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response?.status === 401) {
+    const url = error.config?.url ?? ''
+    const isAuthEndpoint = url.includes('/api/auth/')
+    if (error.response?.status === 401 && !isAuthEndpoint) {
       localStorage.removeItem('auth_token')
       localStorage.removeItem('current_user')
       window.location.href = '/login'

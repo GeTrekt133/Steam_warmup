@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import api from '@/lib/api'
 import { Button } from '@/components/ui/Button'
 import { Modal, ModalHeader, ModalBody } from '@/components/ui/Modal'
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@/components/ui/Table'
@@ -19,6 +20,7 @@ import {
   ShieldCheck,
   Pickaxe,
   Gift,
+  Wallet,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -30,8 +32,11 @@ interface Account {
   password: string
   maFile: boolean        // есть ли привязанный maFile
   maFileName?: string    // имя файла maFile
+  sharedSecret?: string  // shared_secret из maFile для генерации 2FA кода
+  steamId?: string       // Steam ID (SteamID64) аккаунта
+  balance?: string       // баланс кошелька Steam (например "123,45 pуб.")
+  balanceUsd?: number    // баланс в USD
   addedAt: string        // дата добавления (ISO)
-  steamId?: string       // Steam ID аккаунта
   rank?: number          // ранг аккаунта
   exp?: number           // опыт аккаунта
   status: string         // текущий статус аккаунта (wait, farming, warmup, drop и тд)
@@ -70,6 +75,40 @@ function saveAccounts(accounts: Account[]) {
 
 function generateId(): string {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
+}
+
+// ─── Steam Guard 2FA код из shared_secret ─────────────────────
+
+const STEAM_CHARS = '23456789BCDFGHJKMNPQRTVWXY'
+
+async function generateSteamGuardCode(sharedSecret: string): Promise<string> {
+  // Декодируем base64 shared_secret в ключ
+  const keyBytes = Uint8Array.from(atob(sharedSecret), (c) => c.charCodeAt(0))
+
+  // Время: Steam использует 30-секундные интервалы
+  const time = Math.floor(Date.now() / 1000 / 30)
+  const timeBytes = new Uint8Array(8)
+  let t = time
+  for (let i = 7; i >= 0; i--) {
+    timeBytes[i] = t & 0xff
+    t = Math.floor(t / 256)
+  }
+
+  // HMAC-SHA1
+  const key = await crypto.subtle.importKey('raw', keyBytes, { name: 'HMAC', hash: 'SHA-1' }, false, ['sign'])
+  const sig = await crypto.subtle.sign('HMAC', key, timeBytes)
+  const hash = new Uint8Array(sig)
+
+  // Извлекаем 5-символьный код
+  const offset = hash[19] & 0x0f
+  let code = ((hash[offset] & 0x7f) << 24) | (hash[offset + 1] << 16) | (hash[offset + 2] << 8) | hash[offset + 3]
+
+  let result = ''
+  for (let i = 0; i < 5; i++) {
+    result += STEAM_CHARS[code % STEAM_CHARS.length]
+    code = Math.floor(code / STEAM_CHARS.length)
+  }
+  return result
 }
 
 // ─── Главный компонент ───────────────────────────────────────
@@ -219,11 +258,19 @@ export function AccountsPage() {
     setContextMenu({ x: e.clientX, y: e.clientY, account })
   }
 
-  function handleOpenInBrowser(account: Account) {
+  async function handleOpenInBrowser(account: Account) {
     const ids = getTargetIds(account)
     const targets = accounts.filter((a) => ids.has(a.id))
     for (const acc of targets) {
-      window.open(`https://steamcommunity.com/id/${acc.login}`, '_blank')
+      try {
+        await api.post('/api/accounts/open-browser-raw', {
+          login: acc.login,
+          password: acc.password,
+          shared_secret: acc.sharedSecret || undefined,
+        })
+      } catch (e: any) {
+        console.error(`[browser] Ошибка для ${acc.login}:`, e.response?.data?.detail || e.message)
+      }
     }
     setContextMenu(null)
   }
@@ -235,6 +282,32 @@ export function AccountsPage() {
       console.log(`[drop] Collecting drop for ${acc.login}`)
     }
     setContextMenu(null)
+  }
+
+  async function handleParseBalance(account: Account) {
+    const ids = getTargetIds(account)
+    const targets = accounts.filter((a) => ids.has(a.id))
+    setContextMenu(null)
+    for (const acc of targets) {
+      try {
+        const res = await api.post('/api/accounts/parse-balance', {
+          login: acc.login,
+          password: acc.password,
+          shared_secret: acc.sharedSecret || undefined,
+        }, { timeout: 120000 })
+        if (res.data.success && res.data.balance) {
+          setAccounts((prev) => {
+            const updated = prev.map((a) =>
+              a.id === acc.id ? { ...a, balance: res.data.balance, balanceUsd: res.data.balance_usd ?? undefined } : a
+            )
+            saveAccounts(updated)
+            return updated
+          })
+        }
+      } catch (e: any) {
+        console.error(`[balance] Ошибка для ${acc.login}:`, e.response?.data?.detail || e.message)
+      }
+    }
   }
 
   // Переключение статуса «Зафармлен»
@@ -381,6 +454,7 @@ export function AccountsPage() {
               <TableHead className="w-20">Ранг</TableHead>
               <TableHead className="w-20">EXP</TableHead>
               <TableHead className="w-32">maFile</TableHead>
+              <TableHead className="w-28">Баланс</TableHead>
               <TableHead className="w-28 text-center">Зафармлен</TableHead>
               <TableHead className="w-28 text-center">Дроп собран</TableHead>
               <TableHead className="w-40">Добавлен</TableHead>
@@ -438,6 +512,16 @@ export function AccountsPage() {
                     </span>
                   )}
                 </TableCell>
+                <TableCell className="text-xs font-mono">
+                  {account.balance ? (
+                    <div>
+                      <div>{account.balance}</div>
+                      {account.balanceUsd != null && (
+                        <div className="text-[hsl(var(--muted-foreground))]">${account.balanceUsd.toFixed(2)}</div>
+                      )}
+                    </div>
+                  ) : '—'}
+                </TableCell>
                 <TableCell className="text-center">
                   <input
                     type="checkbox"
@@ -478,7 +562,7 @@ export function AccountsPage() {
             ))}
             {filtered.length === 0 && (
               <TableRow>
-                <TableCell colSpan={12} className="text-center py-8 text-[hsl(var(--muted-foreground))]">
+                <TableCell colSpan={13} className="text-center py-8 text-[hsl(var(--muted-foreground))]">
                   Ничего не найдено
                 </TableCell>
               </TableRow>
@@ -500,6 +584,7 @@ export function AccountsPage() {
           }
           onClose={() => setContextMenu(null)}
           onOpenBrowser={handleOpenInBrowser}
+          onParseBalance={handleParseBalance}
           onCollectDrop={handleCollectDrop}
           onToggleFarmed={handleToggleFarmed}
           onToggleDropCollected={handleToggleDropCollected}
@@ -537,6 +622,7 @@ function AccountContextMenu({
   allTargets,
   onClose,
   onOpenBrowser,
+  onParseBalance,
   onCollectDrop,
   onToggleFarmed,
   onToggleDropCollected,
@@ -548,6 +634,7 @@ function AccountContextMenu({
   allTargets: Account[]
   onClose: () => void
   onOpenBrowser: (acc: Account) => void
+  onParseBalance: (acc: Account) => void
   onCollectDrop: (acc: Account) => void
   onToggleFarmed: (acc: Account) => void
   onToggleDropCollected: (acc: Account) => void
@@ -606,14 +693,28 @@ function AccountContextMenu({
     {
       label: 'Копировать 2FA',
       icon: ShieldCheck,
-      onClick: () => copyToClipboard(allTargets.filter((a) => a.maFile).map((a) => a.login).join('\n'), '2fa'),
-      disabled: !allTargets.some((a) => a.maFile),
+      onClick: async () => {
+        const withSecret = allTargets.filter((a) => a.sharedSecret)
+        const codes = await Promise.all(
+          withSecret.map(async (a) => {
+            const code = await generateSteamGuardCode(a.sharedSecret!)
+            return withSecret.length > 1 ? `${a.login}:${code}` : code
+          })
+        )
+        copyToClipboard(codes.join('\n'), '2fa')
+      },
+      disabled: !allTargets.some((a) => a.sharedSecret),
     },
     { type: 'separator' },
     {
       label: 'Открыть в браузере',
       icon: Globe,
       onClick: () => onOpenBrowser(account),
+    },
+    {
+      label: multi ? `Обновить баланс (${allTargets.length})` : 'Обновить баланс',
+      icon: Wallet,
+      onClick: () => onParseBalance(account),
     },
     {
       label: 'Собрать дроп',
@@ -818,6 +919,12 @@ function ImportWizardContent({ onDone, onCancel, existingAccounts }: ImportWizar
             if (account) {
               account.maFile = true
               account.maFileName = accountName + '.maFile'
+              if (json.shared_secret) {
+                account.sharedSecret = json.shared_secret
+              }
+              if (json.Session?.SteamID) {
+                account.steamId = String(json.Session.SteamID)
+              }
               matched++
             }
           }

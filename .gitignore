@@ -25,3 +25,10 @@ Thumbs.db
 .vscode/
 *.swp
 *.swo
+
+# Debug artifacts
+backend/*.html
+backend/*.png
+
+# Datasets (large binary files)
+datasets/

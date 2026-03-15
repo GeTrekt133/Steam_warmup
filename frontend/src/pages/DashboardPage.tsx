@@ -13,24 +13,31 @@ import {
   ShieldHalf,
   Coins,
   Antenna,
+  Wallet,
 } from 'lucide-react'
+import { useState, useEffect } from 'react'
 import { cn } from '@/lib/utils'
 import { Link } from 'react-router-dom'
 import { getCurrentUser } from '@/lib/auth'
+import api from '@/lib/api'
 
 // ─── Загрузка данных из localStorage ─────────────────────────
 
 function getAccountStats() {
   try {
     const raw = localStorage.getItem('steam_accounts')
-    if (!raw) return { total: 0, with2fa: 0, farmed: 0, dropCollected: 0, dropValue: 0, farming: 0, online: 0 }
+    if (!raw) return { total: 0, with2fa: 0, farmed: 0, dropCollected: 0, dropValue: 0, farming: 0, online: 0, totalBalanceUsd: 0 }
     const accounts = JSON.parse(raw) as {
       maFile?: boolean
       isFarmed?: boolean
       isDropCollected?: boolean
       dropValue?: number
       status?: string
+      balanceUsd?: number
     }[]
+
+    const totalBalanceUsd = accounts.reduce((sum, a) => sum + (a.balanceUsd ?? 0), 0)
+
     return {
       total: accounts.length,
       with2fa: accounts.filter((a) => a.maFile).length,
@@ -39,9 +46,10 @@ function getAccountStats() {
       dropValue: accounts.reduce((sum, a) => sum + (a.dropValue ?? 0), 0),
       farming: accounts.filter((a) => a.status === 'farming').length,
       online: accounts.filter((a) => a.status && a.status !== 'waiting').length,
+      totalBalanceUsd,
     }
   } catch {
-    return { total: 0, with2fa: 0, farmed: 0, dropCollected: 0, dropValue: 0, farming: 0, online: 0 }
+    return { total: 0, with2fa: 0, farmed: 0, dropCollected: 0, dropValue: 0, farming: 0, online: 0, totalBalanceUsd: 0 }
   }
 }
 
@@ -64,6 +72,32 @@ function ProgressBar({ value, max, color }: { value: number; max: number; color:
 export function DashboardPage() {
   const s = getAccountStats()
   const user = getCurrentUser()
+  const [totalBalanceUsd, setTotalBalanceUsd] = useState(s.totalBalanceUsd)
+
+  // При загрузке — пересчитываем балансы по актуальному курсу
+  useEffect(() => {
+    const accounts = JSON.parse(localStorage.getItem('steam_accounts') || '[]') as { id: string; balance?: string }[]
+    const balances: Record<string, string> = {}
+    for (const a of accounts) {
+      if (a.balance) balances[a.id] = a.balance
+    }
+    if (Object.keys(balances).length === 0) return
+
+    api.post('/api/accounts/convert-balances', { balances })
+      .then((res) => {
+        const converted: Record<string, number | null> = res.data
+        let total = 0
+        // Обновляем balanceUsd в localStorage
+        const updated = accounts.map((a) => {
+          const usd = converted[a.id] ?? (a as any).balanceUsd
+          if (usd != null) total += usd
+          return { ...a, balanceUsd: usd ?? undefined }
+        })
+        localStorage.setItem('steam_accounts', JSON.stringify(updated))
+        setTotalBalanceUsd(total)
+      })
+      .catch(() => { /* используем кэшированные значения */ })
+  }, [])
   const pctFarmed = s.total > 0 ? Math.round((s.farmed / s.total) * 100) : 0
 
   return (
@@ -192,7 +226,7 @@ export function DashboardPage() {
           { label: 'Онлайн', value: s.online, icon: Antenna, color: 'text-emerald-400', bg: 'bg-emerald-500/10' },
           { label: 'Фармят', value: s.farming, icon: Orbit, color: 'text-blue-400', bg: 'bg-blue-500/10' },
           { label: 'С 2FA', value: s.with2fa, icon: ShieldHalf, color: 'text-amber-400', bg: 'bg-amber-500/10' },
-          { label: 'Заработано', value: `$${s.dropValue.toFixed(2)}`, icon: Coins, color: 'text-teal-400', bg: 'bg-teal-500/10' },
+          { label: 'Баланс Steam', value: totalBalanceUsd > 0 ? `$${totalBalanceUsd.toFixed(2)}` : '—', icon: Wallet, color: 'text-teal-400', bg: 'bg-teal-500/10' },
         ].map((m) => (
           <div key={m.label} className="flex items-center gap-3 rounded-xl border border-[hsl(var(--border))] bg-[hsl(var(--card))] px-4 py-3">
             <div className={cn('p-1.5 rounded-md', m.bg)}>

@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
-import { registerUser } from '@/lib/auth'
+import api from '@/lib/api'
 import { Button } from '@/components/ui/Button'
 
 export function RegisterPage() {
@@ -33,14 +33,13 @@ export function RegisterPage() {
     setLoading(true)
 
     try {
-      const result = await registerUser(username, password)
-      if (result.success) {
-        navigate('/')
-      } else {
-        setError(result.error ?? 'Ошибка регистрации')
-      }
-    } catch {
-      setError('Произошла ошибка при регистрации')
+      const res = await api.post('/api/auth/register', { username, password })
+      localStorage.setItem('auth_token', res.data.access_token)
+      localStorage.setItem('current_user', username)
+      navigate('/')
+    } catch (err: unknown) {
+      const axiosErr = err as { response?: { data?: { detail?: string } } }
+      setError(axiosErr.response?.data?.detail ?? 'Произошла ошибка при регистрации')
     } finally {
       setLoading(false)
     }

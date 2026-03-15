@@ -37,7 +37,7 @@ class GroqVision:
 
     def __init__(self, api_key):
         self.api_key = api_key
-        self.model = "meta-llama/llama-4-maverick-17b-128e-instruct"
+        self.model = "meta-llama/llama-4-scout-17b-16e-instruct"
         self.host = "https://api.groq.com/openai/v1/chat/completions"
 
     def ask(self, prompt, image_urls=None, image_b64s=None):

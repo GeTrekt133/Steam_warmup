@@ -197,25 +197,68 @@ def _step_create_account(ctx: RegContext, session: requests.Session) -> None:
 
 
 async def register_single_account(
-    email_with_password: str,
+    email_with_password: str | None = None,
     login: str | None = None,
     password: str | None = None,
     proxy: dict | None = None,
     orchestrator: CaptchaOrchestrator | None = None,
+    auto_create_email: bool = False,
 ) -> RegContext:
     """
     Зарегистрировать один Steam-аккаунт.
 
     Args:
-        email_with_password: "email@example.com:emailpassword"
+        email_with_password: "email@example.com:emailpassword" (опционально если auto_create_email=True)
         login: логин Steam (если None — генерируется)
         password: пароль Steam (если None — генерируется)
         proxy: {"http": "http://...", "https": "http://..."}
         orchestrator: captcha orchestrator (если None — используется singleton)
+        auto_create_email: если True и email не передан — создаёт Outlook-почту автоматически
 
     Returns:
         RegContext с результатом и шагами
     """
+    # Шаг 0: автосоздание email если нужно
+    if auto_create_email and not email_with_password:
+        from app.services.email_registration import register_outlook_email
+
+        # Конвертируем proxy формат: Steam = {"http": "proto://user:pass@host:port"},
+        # Playwright = {"server": "proto://host:port", "username": ..., "password": ...}
+        pw_proxy = None
+        if proxy:
+            from urllib.parse import urlparse
+            proxy_url = proxy.get("http") or proxy.get("https", "")
+            if proxy_url:
+                parsed = urlparse(proxy_url)
+                pw_proxy = {"server": f"{parsed.scheme}://{parsed.hostname}:{parsed.port}"}
+                if parsed.username:
+                    pw_proxy["username"] = parsed.username
+                if parsed.password:
+                    pw_proxy["password"] = parsed.password
+
+        email_ctx = await register_outlook_email(proxy=pw_proxy)
+
+        if not email_ctx.success:
+            ctx = RegContext(
+                email=email_ctx.actual_email or email_ctx.email,
+                email_password="",
+                login=login or "",
+                password=password or "",
+            )
+            ctx.error = f"Ошибка создания email: {email_ctx.error}"
+            # Копируем шаги email-регистрации
+            for es in email_ctx.steps:
+                ctx.steps.append(RegStep(name=f"email_{es.name}", status=es.status, detail=es.detail))
+            return ctx
+
+        email_with_password = f"{email_ctx.actual_email}:{email_ctx.password}"
+        logger.info("Автосоздан email: %s", email_ctx.actual_email)
+
+    if not email_with_password:
+        ctx = RegContext(email="", email_password="", login=login or "", password=password or "")
+        ctx.error = "Не передан email и auto_create_email=False"
+        return ctx
+
     # Парсим email
     parts = email_with_password.split(":", 1)
     if len(parts) != 2:
@@ -291,15 +334,22 @@ async def register_single_account(
 
 
 async def register_batch(
-    emails: list[str],
+    emails: list[str] | None = None,
+    count: int | None = None,
     login_prefix: str | None = None,
     proxy_list: list[dict] | None = None,
     group_id: int | None = None,
     max_concurrent: int = 3,
     orchestrator: CaptchaOrchestrator | None = None,
+    auto_create_email: bool = False,
 ):
     """
     Массовая регистрация с ограничением параллелизма.
+
+    Args:
+        emails: список "email:password" (если auto_create_email=False)
+        count: количество аккаунтов (если auto_create_email=True и emails не передан)
+        auto_create_email: автоматически создавать Outlook-почту
 
     Yields RegContext по мере завершения.
     """
@@ -307,7 +357,15 @@ async def register_batch(
     semaphore = asyncio.Semaphore(max_concurrent)
     proxy_index = 0
 
-    async def _register_one(idx: int, email_str: str):
+    # Определяем количество задач
+    if auto_create_email and not emails:
+        total = count or 1
+        email_list: list[str | None] = [None] * total
+    else:
+        email_list = emails or []
+        total = len(email_list)
+
+    async def _register_one(idx: int, email_str: str | None):
         nonlocal proxy_index
         async with semaphore:
             login = None
@@ -324,9 +382,10 @@ async def register_batch(
                 login=login,
                 proxy=proxy,
                 orchestrator=orchestrator,
+                auto_create_email=auto_create_email,
             )
 
-    tasks = [_register_one(i, e) for i, e in enumerate(emails)]
+    tasks = [_register_one(i, e) for i, e in enumerate(email_list)]
     for coro in asyncio.as_completed(tasks):
         result = await coro
         yield result

@@ -25,7 +25,7 @@ from app.schemas.account import (
     AccountImportResult,
 )
 from app.services import account_service
-from app.services.steam_browser import open_steam_browser
+from app.services.steam_browser import open_steam_browser, open_steam_browser_raw, fetch_steam_balance, _parse_balance_to_usd
 from app.services.steam_guard import get_code_with_ttl
 from app.services.encryption import decrypt
 
@@ -155,6 +155,78 @@ async def delete_bulk(
     """Массовое удаление аккаунтов."""
     deleted = await account_service.delete_accounts_bulk(db, account_ids, current_user.id)
     return {"deleted": deleted}
+
+
+@router.post("/open-browser-raw")
+async def open_browser_raw(
+    data: dict,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Открыть Steam в браузере по переданным credentials (без привязки к БД).
+
+    Используется пока аккаунты хранятся на фронте в localStorage.
+    Принимает: login, password, shared_secret (опционально).
+    """
+    login = data.get("login")
+    password = data.get("password")
+    shared_secret = data.get("shared_secret")
+
+    if not login or not password:
+        raise HTTPException(status_code=400, detail="Нужны login и password")
+
+    asyncio.create_task(open_steam_browser_raw(login, password, shared_secret))
+
+    return {
+        "status": "launched",
+        "message": f"Браузер открывается для {login}",
+    }
+
+
+@router.post("/convert-balances")
+async def convert_balances(
+    data: dict,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Пересчитывает балансы в USD по актуальному курсу (без логина в Steam).
+
+    Принимает: balances — словарь {account_id: "строка баланса"}.
+    Возвращает: {account_id: usd_value}.
+    """
+    balances: dict = data.get("balances", {})
+    result = {}
+    for account_id, balance_str in balances.items():
+        usd = _parse_balance_to_usd(balance_str) if balance_str else None
+        result[account_id] = usd
+    return result
+
+
+@router.post("/parse-balance")
+async def parse_balance(
+    data: dict,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Логинится в Steam (headless) и возвращает баланс кошелька.
+
+    Принимает: login, password, shared_secret (опционально).
+    """
+    login = data.get("login")
+    password = data.get("password")
+    shared_secret = data.get("shared_secret")
+
+    if not login or not password:
+        raise HTTPException(status_code=400, detail="Нужны login и password")
+
+    result = await fetch_steam_balance(login, password, shared_secret)
+    return {
+        "success": result.success,
+        "balance": result.balance,
+        "balance_usd": result.balance_usd,
+        "message": result.message,
+        "login": login,
+    }
 
 
 @router.post("/{account_id}/open-browser")
@@ -304,3 +376,5 @@ async def link_guard(
         "message": f"Привязка Guard запущена для {account.login}",
         "account_id": account.id,
     }
+
+

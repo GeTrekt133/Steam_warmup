@@ -47,6 +47,16 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str = ""
     GROQ_API_KEY: str = ""
 
+    # --- FunCaptcha (для авторегистрации Outlook) ---
+    FUNCAPTCHA_API_KEY: str = ""
+    FUNCAPTCHA_PROVIDER: str = "ezcaptcha"  # "ezcaptcha" (рекомендуется), "2captcha", "anti-captcha"
+
+    # --- CapSolver (для Steam hCaptcha) ---
+    CAPSOLVER_API_KEY: str = ""
+
+    # --- Dataset (сбор капч) ---
+    DATASET_DIR: str = "../datasets"  # относительно backend/, на одном уровне
+
     # --- CORS ---
     CORS_ORIGINS: list[str] = [
         "http://localhost:5173",  # Vite dev server

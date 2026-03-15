@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 class SolverType(str, Enum):
     GROQ = "groq"
     GEMINI = "gemini"
+    CAPSOLVER = "capsolver"
 
 
 @dataclass
@@ -68,28 +69,34 @@ class CaptchaOrchestrator:
         self,
         groq_api_key: str | None = None,
         gemini_api_key: str | None = None,
+        capsolver_api_key: str | None = None,
         max_retries_per_solver: int = 2,
         proxy_list: list[str] | None = None,
     ):
         self._groq_key = groq_api_key or settings.GROQ_API_KEY
         self._gemini_key = gemini_api_key or settings.GEMINI_API_KEY
+        self._capsolver_key = capsolver_api_key or settings.CAPSOLVER_API_KEY
         self._max_retries = max_retries_per_solver
         self._proxy_list = proxy_list or []
 
         # Lazy-initialized solver instances
         self._groq_solver = None
         self._gemini_solver = None
+        self._capsolver = None
 
         # Stats
         self.stats: dict[SolverType, SolverStats] = {
             SolverType.GROQ: SolverStats(),
             SolverType.GEMINI: SolverStats(),
+            SolverType.CAPSOLVER: SolverStats(),
         }
 
     @property
     def available_solvers(self) -> list[SolverType]:
-        """Список доступных солверов (у которых есть API ключ)."""
+        """Список доступных солверов по приоритету: CapSolver → Groq → Gemini."""
         solvers = []
+        if self._capsolver_key:
+            solvers.append(SolverType.CAPSOLVER)
         if self._groq_key:
             solvers.append(SolverType.GROQ)
         if self._gemini_key:
@@ -109,6 +116,20 @@ class CaptchaOrchestrator:
             from app.captcha import ChallengerSolver
             self._gemini_solver = ChallengerSolver(self._gemini_key)
         return self._gemini_solver
+
+    def _get_capsolver(self):
+        if self._capsolver is None:
+            from app.captcha.capsolver import CapSolverHCaptcha
+            self._capsolver = CapSolverHCaptcha(self._capsolver_key)
+        return self._capsolver
+
+    def _solve_with_capsolver(self, sitekey: str, host: str) -> tuple[str, str]:
+        """Синхронный вызов CapSolver. Возвращает (status, token)."""
+        solver = self._get_capsolver()
+        token = solver.solve(sitekey, page_url=f"https://{host}")
+        if token:
+            return "OK", token
+        raise Exception("CapSolver returned no token")
 
     def _solve_with_groq(self, sitekey: str, host: str) -> tuple[str, str]:
         """Синхронный вызов Groq-солвера. Возвращает (status, token)."""
@@ -136,6 +157,8 @@ class CaptchaOrchestrator:
             func = partial(self._solve_with_groq, sitekey, host)
         elif solver_type == SolverType.GEMINI:
             func = partial(self._solve_with_gemini, sitekey, host)
+        elif solver_type == SolverType.CAPSOLVER:
+            func = partial(self._solve_with_capsolver, sitekey, host)
         else:
             return CaptchaResult(success=False, error=f"Unknown solver: {solver_type}")
 

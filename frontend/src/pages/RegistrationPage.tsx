@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import api from '@/lib/api'
 import {
-  UserPlus, Play, Square, RefreshCw, Trash2, X,
+  UserPlus, Play, Square, RefreshCw, Trash2, X, Mail,
   CheckCircle, XCircle, Clock, Loader2, ChevronDown, ChevronUp,
 } from 'lucide-react'
 
@@ -16,6 +16,8 @@ interface RegResult {
   login: string | null
   password: string | null
   email: string | null
+  email_password: string | null
+  email_created: boolean
   steam_id: string | null
   account_id: number | null
   error: string | null
@@ -40,8 +42,19 @@ interface SolverInfo {
 type Mode = 'single' | 'batch'
 
 const STEP_NAMES: Record<string, string> = {
+  // Email-регистрация (шаг 0)
+  email_open_signup: 'Открытие Outlook',
+  email_enter_email: 'Ввод email',
+  email_enter_password: 'Ввод пароля email',
+  email_enter_name: 'Ввод имени',
+  email_enter_birthdate: 'Дата рождения',
+  email_solve_captcha: 'FunCaptcha (Outlook)',
+  email_check_phone: 'Проверка телефона',
+  email_verify_complete: 'Проверка регистрации',
+  email_verify_imap: 'Проверка IMAP',
+  // Steam-регистрация
   captcha_init: 'Captcha GID',
-  captcha_solve: 'Решение капчи',
+  captcha_solve: 'Решение капчи (Steam)',
   email_verify: 'Отправка email',
   email_fetch: 'Ожидание письма',
   email_confirm: 'Подтверждение',
@@ -49,7 +62,7 @@ const STEP_NAMES: Record<string, string> = {
 }
 
 function StepIcon({ status }: { status: string }) {
-  if (status === 'done') return <CheckCircle size={14} className="text-green-400" />
+  if (status === 'done' || status === 'ok') return <CheckCircle size={14} className="text-green-400" />
   if (status === 'error') return <XCircle size={14} className="text-red-400" />
   if (status === 'running') return <Loader2 size={14} className="text-blue-400 animate-spin" />
   return <Clock size={14} className="text-[hsl(var(--muted-foreground))]" />
@@ -58,6 +71,7 @@ function StepIcon({ status }: { status: string }) {
 export function RegistrationPage() {
   const [mode, setMode] = useState<Mode>('single')
   const [solvers, setSolvers] = useState<SolverInfo | null>(null)
+  const [autoEmail, setAutoEmail] = useState(false)
 
   // Single mode
   const [email, setEmail] = useState('')
@@ -70,6 +84,7 @@ export function RegistrationPage() {
 
   // Batch mode
   const [emails, setEmails] = useState('')
+  const [batchCount, setBatchCount] = useState('5')
   const [loginPrefix, setLoginPrefix] = useState('')
   const [maxConcurrent, setMaxConcurrent] = useState('3')
   const [batchTaskId, setBatchTaskId] = useState<string | null>(null)
@@ -120,18 +135,21 @@ export function RegistrationPage() {
     return () => { if (pollRef.current) clearInterval(pollRef.current) }
   }, [])
 
+  // ── Single registration ───────────────────────────────────
+
   const handleSingle = async () => {
-    if (!email) return
+    if (!autoEmail && !email) return
     setSingleLoading(true)
     setSingleResult(null)
     try {
       const r = await api.post('/api/register/single', {
-        email,
+        email: autoEmail ? undefined : email,
         login: login || undefined,
         password: password || undefined,
         proxy_id: proxyId ? parseInt(proxyId) : undefined,
         group_id: groupId ? parseInt(groupId) : undefined,
-      }, { timeout: 120000 })
+        auto_create_email: autoEmail,
+      }, { timeout: 300000 }) // 5 мин — email создание + Steam регистрация
       setSingleResult(r.data)
       setResults(prev => [r.data, ...prev])
       if (r.data.success) {
@@ -146,22 +164,44 @@ export function RegistrationPage() {
     }
   }
 
+  // ── Batch registration ────────────────────────────────────
+
   const handleBatch = async () => {
-    const emailList = emails.split('\n').map(l => l.trim()).filter(Boolean)
-    if (!emailList.length) return
-    try {
-      const r = await api.post('/api/register/batch', {
-        emails: emailList,
-        login_prefix: loginPrefix || undefined,
-        max_concurrent: parseInt(maxConcurrent) || 3,
-        group_id: groupId ? parseInt(groupId) : undefined,
-      })
-      setBatchTaskId(r.data.task_id)
-      setBatchStatus(null)
-      startPolling(r.data.task_id)
-      flash(`Запущено: ${r.data.total} аккаунтов (task: ${r.data.task_id})`)
-    } catch (e: any) {
-      flash(e.response?.data?.detail || 'Ошибка запуска', 'err')
+    if (!autoEmail) {
+      const emailList = emails.split('\n').map(l => l.trim()).filter(Boolean)
+      if (!emailList.length) return
+      try {
+        const r = await api.post('/api/register/batch', {
+          emails: emailList,
+          login_prefix: loginPrefix || undefined,
+          max_concurrent: parseInt(maxConcurrent) || 3,
+          group_id: groupId ? parseInt(groupId) : undefined,
+          auto_create_email: false,
+        })
+        setBatchTaskId(r.data.task_id)
+        setBatchStatus(null)
+        startPolling(r.data.task_id)
+        flash(`Запущено: ${r.data.total} аккаунтов (task: ${r.data.task_id})`)
+      } catch (e: any) {
+        flash(e.response?.data?.detail || 'Ошибка запуска', 'err')
+      }
+    } else {
+      const count = parseInt(batchCount) || 5
+      try {
+        const r = await api.post('/api/register/batch', {
+          count,
+          login_prefix: loginPrefix || undefined,
+          max_concurrent: parseInt(maxConcurrent) || 3,
+          group_id: groupId ? parseInt(groupId) : undefined,
+          auto_create_email: true,
+        })
+        setBatchTaskId(r.data.task_id)
+        setBatchStatus(null)
+        startPolling(r.data.task_id)
+        flash(`Запущено: ${r.data.total} аккаунтов с автосозданием email (task: ${r.data.task_id})`)
+      } catch (e: any) {
+        flash(e.response?.data?.detail || 'Ошибка запуска', 'err')
+      }
     }
   }
 
@@ -189,7 +229,7 @@ export function RegistrationPage() {
       {/* Warning if no solvers */}
       {noSolvers && (
         <div className="mb-4 px-4 py-3 rounded bg-yellow-500/20 text-yellow-400 text-sm">
-          Нет доступных captcha-солверов. Добавьте GROQ_API_KEY или GEMINI_API_KEY в .env файл бэкенда.
+          Нет доступных captcha-солверов. Добавьте CAPSOLVER_API_KEY, GROQ_API_KEY или GEMINI_API_KEY в .env файл бэкенда.
         </div>
       )}
 
@@ -220,15 +260,37 @@ export function RegistrationPage() {
           </div>
 
           <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4 flex flex-col gap-3">
+            {/* Чекбокс автосоздания email */}
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={autoEmail}
+                onChange={e => setAutoEmail(e.target.checked)}
+                className="h-4 w-4 rounded accent-[hsl(var(--primary))]"
+              />
+              <Mail size={14} className="text-blue-400" />
+              <span className="text-sm">Автосоздание Outlook-почты</span>
+            </label>
+            {autoEmail && (
+              <div className="text-xs text-[hsl(var(--muted-foreground))] bg-blue-500/10 rounded px-3 py-2">
+                Outlook-почта будет создана автоматически перед регистрацией Steam.
+                Нужны: FUNCAPTCHA_API_KEY (EzCaptcha) + CAPSOLVER_API_KEY в .env
+              </div>
+            )}
+
             {mode === 'single' ? (
               <>
-                <label className="text-xs text-[hsl(var(--muted-foreground))] uppercase tracking-wide">Email:пароль</label>
-                <input
-                  className="input w-full"
-                  placeholder="user@mail.ru:emailpass123"
-                  value={email}
-                  onChange={e => setEmail(e.target.value)}
-                />
+                {!autoEmail && (
+                  <>
+                    <label className="text-xs text-[hsl(var(--muted-foreground))] uppercase tracking-wide">Email:пароль</label>
+                    <input
+                      className="input w-full"
+                      placeholder="user@mail.ru:emailpass123"
+                      value={email}
+                      onChange={e => setEmail(e.target.value)}
+                    />
+                  </>
+                )}
                 <label className="text-xs text-[hsl(var(--muted-foreground))] uppercase tracking-wide">Steam логин (опц.)</label>
                 <input
                   className="input w-full"
@@ -256,27 +318,42 @@ export function RegistrationPage() {
                 </div>
                 <button
                   onClick={handleSingle}
-                  disabled={singleLoading || !email || noSolvers}
+                  disabled={singleLoading || (!autoEmail && !email) || !!noSolvers}
                   className="btn-primary w-full mt-2"
                 >
                   {singleLoading ? (
                     <><Loader2 size={16} className="animate-spin" /> Регистрация...</>
                   ) : (
-                    <><Play size={16} /> Зарегистрировать</>
+                    <><Play size={16} /> {autoEmail ? 'Создать email + Steam' : 'Зарегистрировать'}</>
                   )}
                 </button>
               </>
             ) : (
               <>
-                <label className="text-xs text-[hsl(var(--muted-foreground))] uppercase tracking-wide">
-                  Email-ы (email:password, по строке)
-                </label>
-                <textarea
-                  className="input w-full h-40 resize-none font-mono text-xs"
-                  placeholder={"user1@mail.ru:pass1\nuser2@gmail.com:pass2\nuser3@yandex.ru:pass3"}
-                  value={emails}
-                  onChange={e => setEmails(e.target.value)}
-                />
+                {autoEmail ? (
+                  <>
+                    <label className="text-xs text-[hsl(var(--muted-foreground))] uppercase tracking-wide">Количество аккаунтов</label>
+                    <input
+                      className="input w-full"
+                      type="number" min="1" max="100"
+                      placeholder="5"
+                      value={batchCount}
+                      onChange={e => setBatchCount(e.target.value)}
+                    />
+                  </>
+                ) : (
+                  <>
+                    <label className="text-xs text-[hsl(var(--muted-foreground))] uppercase tracking-wide">
+                      Email-ы (email:password, по строке)
+                    </label>
+                    <textarea
+                      className="input w-full h-40 resize-none font-mono text-xs"
+                      placeholder={"user1@mail.ru:pass1\nuser2@gmail.com:pass2\nuser3@yandex.ru:pass3"}
+                      value={emails}
+                      onChange={e => setEmails(e.target.value)}
+                    />
+                  </>
+                )}
                 <label className="text-xs text-[hsl(var(--muted-foreground))] uppercase tracking-wide">Префикс логинов (опц.)</label>
                 <input
                   className="input w-full"
@@ -301,13 +378,16 @@ export function RegistrationPage() {
                 </div>
                 <button
                   onClick={handleBatch}
-                  disabled={batchPolling || !emails.trim() || noSolvers}
+                  disabled={batchPolling || (!autoEmail && !emails.trim()) || !!noSolvers}
                   className="btn-primary w-full mt-2"
                 >
                   {batchPolling ? (
                     <><Loader2 size={16} className="animate-spin" /> Выполняется...</>
                   ) : (
-                    <><Play size={16} /> Запустить ({emails.split('\n').filter(l => l.trim()).length} шт.)</>
+                    <><Play size={16} /> {autoEmail
+                      ? `Создать ${parseInt(batchCount) || 5} аккаунтов`
+                      : `Запустить (${emails.split('\n').filter(l => l.trim()).length} шт.)`
+                    }</>
                   )}
                 </button>
               </>
@@ -346,6 +426,12 @@ export function RegistrationPage() {
                   <div>Пароль: <span className="font-mono text-[hsl(var(--foreground))]">{singleResult.password}</span></div>
                   {singleResult.steam_id && (
                     <div>SteamID: <span className="font-mono text-[hsl(var(--foreground))]">{singleResult.steam_id}</span></div>
+                  )}
+                  {singleResult.email && (
+                    <div>Email: <span className="font-mono text-[hsl(var(--foreground))]">{singleResult.email}</span></div>
+                  )}
+                  {singleResult.email_password && (
+                    <div>Email пароль: <span className="font-mono text-[hsl(var(--foreground))]">{singleResult.email_password}</span></div>
                   )}
                 </div>
               )}
@@ -396,6 +482,9 @@ export function RegistrationPage() {
                         <XCircle size={16} className="text-red-400 flex-shrink-0" />
                       )}
                       <span className="font-mono text-sm">{r.login || r.email || '—'}</span>
+                      {r.email_created && (
+                        <Mail size={12} className="text-blue-400" title="Email создан автоматически" />
+                      )}
                       <span className="text-xs text-[hsl(var(--muted-foreground))] ml-auto">
                         {r.email}
                       </span>
@@ -409,6 +498,8 @@ export function RegistrationPage() {
                             <div>Пароль: <span className="font-mono">{r.password}</span></div>
                             {r.steam_id && <div>SteamID: <span className="font-mono">{r.steam_id}</span></div>}
                             {r.account_id && <div>Account ID: <span className="font-mono">{r.account_id}</span></div>}
+                            {r.email && <div>Email: <span className="font-mono">{r.email}</span></div>}
+                            {r.email_password && <div>Email пароль: <span className="font-mono">{r.email_password}</span></div>}
                           </div>
                         )}
                         {r.steps.map((s, si) => (

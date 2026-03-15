@@ -26,6 +26,7 @@ from app.schemas.registration import (
 )
 from app.schemas.account import AccountCreate
 from app.services import account_service
+from app.services import email_account_service
 from app.services.steam_registration import register_single_account, register_batch
 from app.services.captcha_orchestrator import get_orchestrator
 
@@ -39,6 +40,15 @@ def _proxy_dict(proxy_str: str | None) -> dict | None:
     """Конвертировать строку прокси в dict для requests."""
     if not proxy_str:
         return None
+    return {"http": proxy_str, "https": proxy_str}
+
+
+def _build_proxy_dict(px) -> dict:
+    """Построить proxy dict из модели Proxy."""
+    proxy_str = f"{px.protocol}://"
+    if px.username and px.password:
+        proxy_str += f"{px.username}:{px.password}@"
+    proxy_str += f"{px.host}:{px.port}"
     return {"http": proxy_str, "https": proxy_str}
 
 
@@ -61,22 +71,33 @@ async def register_single(
         result = await db.execute(select(Proxy).where(Proxy.id == req.proxy_id))
         px = result.scalar_one_or_none()
         if px:
-            proxy_str = f"{px.protocol}://"
-            if px.username:
-                from app.services.encryption import decrypt as dec
-                pw = dec(px.password_encrypted) if hasattr(px, 'password_encrypted') else ""
-                proxy_str += f"{px.username}:{pw}@"
-            proxy_str += f"{px.host}:{px.port}"
-            proxy = {"http": proxy_str, "https": proxy_str}
+            proxy = _build_proxy_dict(px)
 
     ctx = await register_single_account(
         email_with_password=req.email,
         login=req.login,
         password=req.password,
         proxy=proxy,
+        auto_create_email=req.auto_create_email,
     )
 
-    # Если успешно — сохраняем в БД
+    # Сохраняем email-аккаунт если был создан автоматически
+    email_account_id = None
+    if req.auto_create_email and ctx.email and ctx.email_password:
+        try:
+            email_status = "active" if ctx.success else (ctx.error if ctx.error == "phone_required" else "error")
+            email_acc = await email_account_service.create_email_account(
+                db, email=ctx.email, password=ctx.email_password,
+                owner_id=current_user.id, proxy_id=req.proxy_id,
+                status=email_status,
+                note=f"Авторег. Steam login: {ctx.login}" if ctx.success else ctx.error,
+            )
+            email_account_id = email_acc.id
+        except Exception:
+            pass  # не критично — Steam акк важнее
+
+    # Сохраняем Steam-аккаунт если успешно
+    account_id = None
     if ctx.success:
         account_data = AccountCreate(
             login=ctx.login,
@@ -88,16 +109,20 @@ async def register_single(
         )
         account = await account_service.create_account(db, account_data, current_user.id)
         account_id = account.id
-    else:
-        account_id = None
+
+        # Привязываем email к Steam-аккаунту
+        if email_account_id:
+            await email_account_service.link_to_steam(db, email_account_id, account.id)
 
     return RegistrationResult(
         success=ctx.success,
         login=ctx.login,
         password=ctx.password if ctx.success else None,
         email=ctx.email,
+        email_password=ctx.email_password if req.auto_create_email else None,
         steam_id=ctx.steam_id,
         account_id=account_id,
+        email_created=req.auto_create_email and ctx.email_password is not None,
         error=ctx.error,
         steps=[
             RegistrationStepStatus(step=s.name, status=s.status, detail=s.detail)
@@ -117,13 +142,15 @@ async def register_batch_start(
 
     Возвращает task_id для отслеживания через GET /register/status/{task_id}.
     """
-    if not req.emails:
-        raise HTTPException(status_code=400, detail="Список emails пуст")
+    if not req.emails and not req.auto_create_email:
+        raise HTTPException(status_code=400, detail="Список emails пуст и auto_create_email=False")
+
+    total = len(req.emails) if req.emails else (req.count or 1)
 
     task_id = str(uuid.uuid4())[:8]
     status = BatchRegistrationStatus(
         task_id=task_id,
-        total=len(req.emails),
+        total=total,
         completed=0,
         succeeded=0,
         failed=0,
@@ -131,12 +158,11 @@ async def register_batch_start(
     )
     _batch_tasks[task_id] = status
 
-    # Запускаем в фоне
     asyncio.create_task(
         _run_batch(task_id, req, current_user.id)
     )
 
-    return {"task_id": task_id, "total": len(req.emails), "status": "started"}
+    return {"task_id": task_id, "total": total, "status": "started"}
 
 
 async def _run_batch(
@@ -148,7 +174,8 @@ async def _run_batch(
     from app.database import async_session
 
     status = _batch_tasks[task_id]
-    status.in_progress = len(req.emails)
+    total = len(req.emails) if req.emails else (req.count or 1)
+    status.in_progress = total
 
     # Подготовка прокси
     proxy_list = None
@@ -160,16 +187,15 @@ async def _run_batch(
                 select(Proxy).where(Proxy.id.in_(req.proxy_ids))
             )
             proxies = result.scalars().all()
-            proxy_list = []
-            for px in proxies:
-                proxy_str = f"{px.protocol}://{px.host}:{px.port}"
-                proxy_list.append({"http": proxy_str, "https": proxy_str})
+            proxy_list = [_build_proxy_dict(px) for px in proxies]
 
     async for ctx in register_batch(
         emails=req.emails,
+        count=req.count,
         login_prefix=req.login_prefix,
         proxy_list=proxy_list,
         max_concurrent=req.max_concurrent,
+        auto_create_email=req.auto_create_email,
     ):
         status.completed += 1
         status.in_progress = status.total - status.completed
