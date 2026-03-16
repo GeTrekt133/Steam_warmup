@@ -1,0 +1,91 @@
+{
+  "permissions": {
+    "allow": [
+      "Read",
+      "Edit",
+      "Write",
+      "Glob",
+      "Grep",
+      "WebFetch",
+      "WebSearch",
+      "Bash(python -m pytest *)",
+      "Bash(python -m uvicorn *)",
+      "Bash(pip install *)",
+      "Bash(pip freeze *)",
+      "Bash(npm run *)",
+      "Bash(npm install *)",
+      "Bash(npm test *)",
+      "Bash(npx *)",
+      "Bash(git status *)",
+      "Bash(git diff *)",
+      "Bash(git log *)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git branch *)",
+      "Bash(git checkout *)",
+      "Bash(git switch *)",
+      "Bash(git stash *)",
+      "Bash(git merge *)",
+      "Bash(alembic *)",
+      "Bash(playwright install *)",
+      "Bash(ls *)",
+      "Bash(cat *)",
+      "Bash(mkdir *)",
+      "Bash(cd *)",
+      "Bash(pwd)",
+      "Bash(echo *)",
+      "Bash(which *)",
+      "Bash(where *)",
+      "Bash(node *)",
+      "Bash(python *)"
+    ],
+    "deny": [
+      "Bash(rm -rf *)",
+      "Bash(del /s /q *)",
+      "Bash(rmdir /s /q *)",
+      "Bash(Remove-Item -Recurse *)",
+      "Bash(sudo *)",
+      "Bash(git push --force *)",
+      "Bash(git push -f *)",
+      "Bash(git reset --hard *)",
+      "Bash(git clean -f *)",
+      "Bash(git checkout main)",
+      "Bash(git switch main)",
+      "Bash(curl * | bash)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '[AUDIT] File modified'"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python -c \"import sys,json,re; data=json.load(sys.stdin); cmd=data.get('tool_input',{}).get('command',''); match=re.search(r'DROP TABLE|DELETE FROM|TRUNCATE',cmd,re.IGNORECASE); sys.exit(2) if match else sys.exit(0)\" 2>&1 || true"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '[DONE] Claude finished autonomous task'"
+          }
+        ]
+      }
+    ]
+  }
+}

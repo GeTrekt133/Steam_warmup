@@ -79,6 +79,7 @@ export function RegistrationPage() {
   const [password, setPassword] = useState('')
   const [proxyId, setProxyId] = useState('')
   const [groupId, setGroupId] = useState('')
+  const [proxyList, setProxyList] = useState<{id: number; host: string; port: number; is_alive: boolean; country: string | null}[]>([])
   const [singleLoading, setSingleLoading] = useState(false)
   const [singleResult, setSingleResult] = useState<RegResult | null>(null)
 
@@ -106,6 +107,7 @@ export function RegistrationPage() {
   // Load solvers info
   useEffect(() => {
     api.get('/api/captcha/solvers').then(r => setSolvers(r.data)).catch(() => {})
+    api.get('/api/proxies/').then(r => setProxyList(r.data)).catch(() => {})
   }, [])
 
   // Batch polling
@@ -308,8 +310,19 @@ export function RegistrationPage() {
                 />
                 <div className="flex gap-2">
                   <div className="flex-1">
-                    <label className="text-xs text-[hsl(var(--muted-foreground))] uppercase tracking-wide">Proxy ID</label>
-                    <input className="input w-full mt-1" placeholder="—" value={proxyId} onChange={e => setProxyId(e.target.value)} />
+                    <label className="text-xs text-[hsl(var(--muted-foreground))] uppercase tracking-wide">Прокси</label>
+                    <select
+                      className="w-full mt-1 rounded-md border border-[hsl(var(--border-strong))] bg-[hsl(var(--input))] px-3 py-2 text-sm"
+                      value={proxyId}
+                      onChange={e => setProxyId(e.target.value)}
+                    >
+                      <option value="">Без прокси</option>
+                      {proxyList.map(p => (
+                        <option key={p.id} value={p.id}>
+                          {p.host}:{p.port} {p.country ? `(${p.country})` : ''} {p.is_alive ? '' : ' [offline]'}
+                        </option>
+                      ))}
+                    </select>
                   </div>
                   <div className="flex-1">
                     <label className="text-xs text-[hsl(var(--muted-foreground))] uppercase tracking-wide">Группа ID</label>

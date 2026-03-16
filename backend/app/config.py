@@ -57,6 +57,17 @@ class Settings(BaseSettings):
     # --- Dataset (сбор капч) ---
     DATASET_DIR: str = "../datasets"  # относительно backend/, на одном уровне
 
+    # --- G2A Integration API ---
+    G2A_API_KEY: str = ""
+    G2A_API_SECRET: str = ""
+    G2A_EMAIL: str = ""
+    G2A_SANDBOX: bool = True  # True = sandbox, False = production
+
+    # --- ASF (ArchiSteamFarm) ---
+    ASF_DIR: str = "../asf"                      # папка с ASF бинарём (относительно backend/)
+    ASF_IPC_URL: str = "http://127.0.0.1:1242"  # IPC сервер ASF
+    ASF_IPC_PASSWORD: str = ""                   # пароль IPC (пусто = без пароля)
+
     # --- CORS ---
     CORS_ORIGINS: list[str] = [
         "http://localhost:5173",  # Vite dev server

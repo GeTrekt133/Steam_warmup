@@ -33,6 +33,7 @@ interface Account {
   maFile: boolean        // есть ли привязанный maFile
   maFileName?: string    // имя файла maFile
   sharedSecret?: string  // shared_secret из maFile для генерации 2FA кода
+  maFileJson?: string    // полный JSON maFile (для ASF)
   steamId?: string       // Steam ID (SteamID64) аккаунта
   balance?: string       // баланс кошелька Steam (например "123,45 pуб.")
   balanceUsd?: number    // баланс в USD
@@ -922,6 +923,8 @@ function ImportWizardContent({ onDone, onCancel, existingAccounts }: ImportWizar
               if (json.shared_secret) {
                 account.sharedSecret = json.shared_secret
               }
+              // Сохраняем полный maFile JSON для ASF
+              account.maFileJson = content
               if (json.Session?.SteamID) {
                 account.steamId = String(json.Session.SteamID)
               }

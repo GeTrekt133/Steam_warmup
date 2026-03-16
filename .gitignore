@@ -1,34 +1,36 @@
+# ASF binary distribution (downloaded at runtime)
+asf/
+
 # Python
 __pycache__/
-*.pyc
-*.pyo
+*.py[cod]
 *.egg-info/
 venv/
 .env
+
+# Database
 *.db
+
+# Debug artifacts
+*_debug.html
+*_debug.png
 
 # Node
 node_modules/
 dist/
 dist-electron/
-out/
 
-# Docker
-pgdata/
-
-# OS
-.DS_Store
-Thumbs.db
+# Datasets
+datasets/
 
 # IDE
-.idea/
 .vscode/
-*.swp
-*.swo
+.idea/
 
-# Debug artifacts
-backend/*.html
-backend/*.png
+# OS
+Thumbs.db
+desktop.ini
+.DS_Store
 
-# Datasets (large binary files)
-datasets/
+# Logs
+*.log
