@@ -264,6 +264,44 @@ def shuffle_quests(quest_ids: list[tuple[str, str]]) -> list[tuple[str, str]]:
         result.extend(group)
     return result
 
+def _group_shuffled_quests(shuffled: list[tuple[str, str]]) -> list[list[tuple[str, str]]]:
+    """
+    Группирует уже перемешанные квесты обратно по зависимостям.
+
+    Зависимые квесты идут в одной группе, независимые — каждый отдельная группа.
+    Это нужно для вставки длинных пауз между группами.
+    """
+    # Маппинг quest_id → номер группы зависимостей
+    dep_map: dict[str, int] = {}
+    for i, dep_group in enumerate(QUEST_DEPENDENCY_GROUPS):
+        for qid in dep_group:
+            dep_map[qid] = i
+
+    groups: list[list[tuple[str, str]]] = []
+    current_group: list[tuple[str, str]] = []
+    current_dep_id: int | None = None
+
+    for qid, qname in shuffled:
+        qid_dep = dep_map.get(qid)
+
+        if not current_group:
+            current_group.append((qid, qname))
+            current_dep_id = qid_dep
+        elif qid_dep is not None and qid_dep == current_dep_id:
+            # Тот же блок зависимостей — добавляем в текущую группу
+            current_group.append((qid, qname))
+        else:
+            # Новая группа
+            groups.append(current_group)
+            current_group = [(qid, qname)]
+            current_dep_id = qid_dep
+
+    if current_group:
+        groups.append(current_group)
+
+    return groups
+
+
 # ─── Рандомные данные для профиля ─────────────────────────────
 
 _BIOS = [
@@ -437,6 +475,9 @@ class WarmupRunner:
             context = browser.new_context()
             page = context.new_page()
 
+            # ─── Прогрев браузера: пошататься по Steam ───────────
+            self._browser_warmup(page)
+
             # Логин
             self._steam_login(page)
 
@@ -449,58 +490,82 @@ class WarmupRunner:
             ]
             logger.info(f"[Warmup] {self.login}: порядок квестов: {[q[0] for q in shuffled]}")
 
+            # Группируем квесты обратно по зависимостям для пауз между группами
+            quest_groups = _group_shuffled_quests(shuffled)
+            logger.info(f"[Warmup] {self.login}: {len(quest_groups)} групп квестов")
+
             # Общий timeout на весь warmup
             warmup_start_time = time.time()
+            quest_index = 0
 
-            # Выполняем квесты
-            for i, (quest_id, quest_name) in enumerate(self.quests):
-                # Проверяем общий timeout
-                elapsed = time.time() - warmup_start_time
-                if elapsed > self.warmup_timeout:
-                    logger.warning(
-                        f"[Warmup] {self.login}: общий timeout {self.warmup_timeout}s "
-                        f"превышен ({elapsed:.0f}s), пропускаем оставшиеся квесты"
+            # Выполняем квесты группами
+            for group_idx, group in enumerate(quest_groups):
+                # Пауза между группами квестов (имитация чтения / размышления)
+                if group_idx > 0:
+                    group_pause = random.uniform(5.0, 15.0)
+                    logger.info(f"[Warmup] {self.login}: пауза между группами {group_pause:.1f}s")
+                    time.sleep(group_pause)
+                    # Human-like действия между группами
+                    if random.random() < 0.7:
+                        human_actions(page)
+
+                for quest_id, quest_name in group:
+                    # Проверяем общий timeout
+                    elapsed = time.time() - warmup_start_time
+                    if elapsed > self.warmup_timeout:
+                        logger.warning(
+                            f"[Warmup] {self.login}: общий timeout {self.warmup_timeout}s "
+                            f"превышен ({elapsed:.0f}s), пропускаем оставшиеся квесты"
+                        )
+                        for j in range(quest_index, len(self.quests)):
+                            self.status.quests[j].status = "skipped"
+                            self.status.quests[j].error = "Общий timeout превышен"
+                        quest_index = len(self.quests)
+                        break
+
+                    qs = self.status.quests[quest_index]
+                    qs.status = "running"
+                    self.status.current_quest = quest_name
+
+                    method = getattr(self, f"_quest_{quest_id}", None)
+                    if not method:
+                        qs.status = "skipped"
+                        qs.error = "Не реализован"
+                        quest_index += 1
+                        continue
+
+                    logger.info(f"[Warmup] {self.login}: квест '{quest_name}'")
+
+                    # Retry с экспоненциальным backoff
+                    status, error, error_dumps = run_quest_with_retry(
+                        quest_method=method,
+                        page=page,
+                        login=self.login,
+                        quest_id=quest_id,
+                        max_retries=self.max_quest_retries,
                     )
-                    for j in range(i, len(self.quests)):
-                        self.status.quests[j].status = "skipped"
-                        self.status.quests[j].error = "Общий timeout превышен"
-                    break
+                    qs.status = status
+                    qs.error = error
+                    qs.error_dumps = error_dumps
+                    qs.retries = len(error_dumps)
 
-                qs = self.status.quests[i]
-                qs.status = "running"
-                self.status.current_quest = quest_name
+                    # Человеческая пауза между квестами (нормальное распределение)
+                    delay = human_delay(mean=3.0, std=1.5, min_val=1.0, max_val=8.0)
+                    logger.info(f"[Warmup] {self.login}: пауза {delay:.1f}s после '{quest_name}'")
 
-                method = getattr(self, f"_quest_{quest_id}", None)
-                if not method:
-                    qs.status = "skipped"
-                    qs.error = "Не реализован"
-                    continue
+                    # Случайные human-like действия между квестами
+                    if random.random() < 0.6:
+                        human_actions(page)
 
-                logger.info(f"[Warmup] {self.login}: квест '{quest_name}'")
-
-                # Retry с экспоненциальным backoff
-                status, error, error_dumps = run_quest_with_retry(
-                    quest_method=method,
-                    page=page,
-                    login=self.login,
-                    quest_id=quest_id,
-                    max_retries=self.max_quest_retries,
-                )
-                qs.status = status
-                qs.error = error
-                qs.error_dumps = error_dumps
-                qs.retries = len(error_dumps)
-
-                # Человеческая пауза между квестами (нормальное распределение)
-                delay = human_delay(mean=3.0, std=1.5, min_val=1.0, max_val=8.0)
-                logger.info(f"[Warmup] {self.login}: пауза {delay:.1f}s после '{quest_name}'")
-
-                # Случайные human-like действия между квестами
-                if random.random() < 0.6:
-                    human_actions(page)
+                    quest_index += 1
 
             self.status.status = "done"
             self.status.current_quest = None
+
+            # Случайная задержка после warmup (1–5 мин перед следующим аккаунтом)
+            post_warmup_delay = random.uniform(60, 300)
+            logger.info(f"[Warmup] {self.login}: пост-warmup задержка {post_warmup_delay / 60:.1f} мин")
+            time.sleep(post_warmup_delay)
 
             browser.close()
             pw.stop()
@@ -512,6 +577,34 @@ class WarmupRunner:
 
         logger.info(f"[Warmup] {self.login}: завершён ({self.status.quests_done}/{self.status.quests_total})")
         return self.status
+
+    def _browser_warmup(self, page: Page):
+        """Прогрев браузера: зайти на Steam, пошататься 10–20 сек."""
+        warmup_start = time.time()
+        logger.info(f"[Warmup] {self.login}: прогрев браузера...")
+        try:
+            page.goto("https://store.steampowered.com/", wait_until="domcontentloaded", timeout=20000)
+            time.sleep(random.uniform(2, 5))
+
+            # Скроллим главную страницу
+            for _ in range(random.randint(2, 4)):
+                page.mouse.wheel(0, random.randint(200, 600))
+                time.sleep(random.uniform(1, 3))
+
+            # Иногда заходим на случайную страницу
+            if random.random() < 0.5:
+                pages = [
+                    "https://steamcommunity.com/",
+                    "https://store.steampowered.com/explore/",
+                    "https://store.steampowered.com/news/",
+                ]
+                page.goto(random.choice(pages), wait_until="domcontentloaded", timeout=15000)
+                time.sleep(random.uniform(2, 5))
+
+            elapsed = time.time() - warmup_start
+            logger.info(f"[Warmup] {self.login}: прогрев браузера {elapsed:.1f}s")
+        except Exception as e:
+            logger.debug(f"[Warmup] {self.login}: ошибка прогрева браузера: {e}")
 
     # ─── Логин ───────────────────────────────────────────────
 
