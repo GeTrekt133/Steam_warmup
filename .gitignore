@@ -34,3 +34,5 @@ desktop.ini
 
 # Logs
 *.log
+backend/error_dumps/*.png
+backend/error_dumps/*.html

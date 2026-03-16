@@ -10,20 +10,259 @@
 
 Каждый квест — отдельный метод, выполняется последовательно.
 Прогресс трекится для отображения на фронтенде.
+
+Антибан:
+- Задержки между квестами: нормальное распределение (mean=3, std=1.5)
+- Human-like действия: скролл, движение мыши, клик в пустую область
+- Рандомизация порядка независимых квестов
+- Rate limiting: ограничение запусков в минуту с одного IP
+- Retry при ошибках с экспоненциальным backoff
 """
 
 import logging
+import math
 import random
 import time
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from playwright.sync_api import sync_playwright, Page, Browser
+from playwright.sync_api import sync_playwright, Page, Browser, TimeoutError as PlaywrightTimeout
 
 from app.services.steam_guard import generate_steam_guard_code
 
 logger = logging.getLogger(__name__)
+
+# Директория для сохранения скриншотов/HTML при ошибках
+ERROR_DUMPS_DIR = Path(__file__).parent.parent.parent / "error_dumps"
+ERROR_DUMPS_DIR.mkdir(exist_ok=True)
+
+
+# ─── Антибан: рандомные задержки и human-like действия ─────────
+
+def human_delay(mean: float = 3.0, std: float = 1.5, min_val: float = 1.0, max_val: float = 8.0) -> float:
+    """Задержка с нормальным распределением (имитация человека)."""
+    delay = random.gauss(mean, std)
+    delay = max(min_val, min(max_val, delay))
+    logger.debug(f"[Antiban] human_delay: {delay:.2f}s")
+    time.sleep(delay)
+    return delay
+
+
+def human_actions(page: Page):
+    """Случайные human-like действия на текущей странице."""
+    actions = random.sample([
+        "scroll",
+        "mouse_move",
+        "click_empty",
+    ], k=random.randint(1, 3))
+
+    for action in actions:
+        try:
+            if action == "scroll":
+                # Скролл вниз на случайное расстояние
+                scroll_y = random.randint(100, 500)
+                page.mouse.wheel(0, scroll_y)
+                time.sleep(random.uniform(0.3, 1.0))
+                # Иногда скроллим обратно
+                if random.random() < 0.3:
+                    page.mouse.wheel(0, -random.randint(50, 200))
+                    time.sleep(random.uniform(0.2, 0.5))
+
+            elif action == "mouse_move":
+                # Движение мыши в случайную точку
+                vp = page.viewport_size or {"width": 1280, "height": 720}
+                x = random.randint(100, vp["width"] - 100)
+                y = random.randint(100, vp["height"] - 100)
+                page.mouse.move(x, y)
+                time.sleep(random.uniform(0.2, 0.8))
+
+            elif action == "click_empty":
+                # Клик в пустую область (body, не по ссылке)
+                vp = page.viewport_size or {"width": 1280, "height": 720}
+                x = random.randint(50, vp["width"] - 50)
+                y = random.randint(50, min(150, vp["height"] - 50))
+                page.mouse.click(x, y)
+                time.sleep(random.uniform(0.2, 0.6))
+
+            logger.debug(f"[Antiban] human_action: {action}")
+        except Exception as e:
+            logger.debug(f"[Antiban] human_action {action} failed: {e}")
+
+
+# ─── Rate limiter: ограничение запусков в минуту ──────────────
+
+class RateLimiter:
+    """Лимитирует количество запусков warmup аккаунтов в минуту с одного IP."""
+
+    def __init__(self, max_per_minute: int = 3):
+        self.max_per_minute = max(1, max_per_minute)
+        self._timestamps: list[float] = []
+        self._lock = threading.Lock()
+
+    def wait(self):
+        """Блокирует поток пока не освободится слот."""
+        while True:
+            with self._lock:
+                now = time.time()
+                # Убираем записи старше 60 сек
+                self._timestamps = [t for t in self._timestamps if now - t < 60.0]
+                if len(self._timestamps) < self.max_per_minute:
+                    self._timestamps.append(now)
+                    return
+                # Ждём до освобождения самого раннего слота
+                wait_time = 60.0 - (now - self._timestamps[0]) + 0.1
+            logger.info(f"[RateLimiter] ожидание {wait_time:.1f}s (лимит {self.max_per_minute}/мин)")
+            time.sleep(min(wait_time, 10.0))
+
+
+# Глобальный rate limiter (настраивается при запуске warmup)
+_global_rate_limiter: RateLimiter | None = None
+
+
+def get_rate_limiter(max_per_minute: int = 3) -> RateLimiter:
+    """Получить или создать глобальный rate limiter."""
+    global _global_rate_limiter
+    if _global_rate_limiter is None or _global_rate_limiter.max_per_minute != max_per_minute:
+        _global_rate_limiter = RateLimiter(max_per_minute)
+    return _global_rate_limiter
+
+
+# ─── Retry и обработка ошибок ─────────────────────────────────
+
+def save_error_dump(page: Page, login: str, quest_id: str, attempt: int) -> dict[str, str | None]:
+    """Сохраняет скриншот и HTML-дамп страницы при ошибке квеста."""
+    dumps: dict[str, str | None] = {"screenshot": None, "html": None}
+    timestamp = int(time.time())
+    prefix = f"{login}_{quest_id}_attempt{attempt}_{timestamp}"
+
+    try:
+        screenshot_path = ERROR_DUMPS_DIR / f"{prefix}.png"
+        page.screenshot(path=str(screenshot_path), full_page=False, timeout=5000)
+        dumps["screenshot"] = str(screenshot_path)
+        logger.info(f"[ErrorDump] скриншот: {screenshot_path}")
+    except Exception as e:
+        logger.debug(f"[ErrorDump] не удалось сохранить скриншот: {e}")
+
+    try:
+        html_path = ERROR_DUMPS_DIR / f"{prefix}.html"
+        html_content = page.content()
+        html_path.write_text(html_content[:500_000], encoding="utf-8")
+        dumps["html"] = str(html_path)
+        logger.info(f"[ErrorDump] HTML: {html_path}")
+    except Exception as e:
+        logger.debug(f"[ErrorDump] не удалось сохранить HTML: {e}")
+
+    return dumps
+
+
+def run_quest_with_retry(
+    quest_method: Callable,
+    page: Page,
+    login: str,
+    quest_id: str,
+    max_retries: int = 3,
+    base_backoff: float = 2.0,
+) -> tuple[str, str | None, list[dict]]:
+    """
+    Выполняет квест с retry и экспоненциальным backoff.
+
+    Returns:
+        (status, error_message, error_dumps)
+        status: "done" | "skipped"
+    """
+    error_dumps: list[dict] = []
+    last_error = None
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            quest_method(page)
+            if attempt > 1:
+                logger.info(f"[Retry] {login}: '{quest_id}' выполнен с попытки {attempt}")
+            return "done", None, error_dumps
+        except PlaywrightTimeout as e:
+            last_error = str(e)[:200]
+            logger.warning(
+                f"[Retry] {login}: '{quest_id}' таймаут (попытка {attempt}/{max_retries}): {last_error}"
+            )
+            # Сохраняем дамп ошибки
+            dump = save_error_dump(page, login, quest_id, attempt)
+            error_dumps.append({"attempt": attempt, "error": last_error, **dump})
+
+            if attempt < max_retries:
+                backoff = base_backoff * (2 ** (attempt - 1))  # 2, 4, 8
+                # При таймауте увеличиваем backoff
+                backoff *= 1.5
+                logger.info(f"[Retry] {login}: ожидание {backoff:.1f}s перед повтором (таймаут)")
+                time.sleep(backoff)
+        except Exception as e:
+            last_error = str(e)[:200]
+            logger.warning(
+                f"[Retry] {login}: '{quest_id}' ошибка (попытка {attempt}/{max_retries}): {last_error}"
+            )
+            dump = save_error_dump(page, login, quest_id, attempt)
+            error_dumps.append({"attempt": attempt, "error": last_error, **dump})
+
+            if attempt < max_retries:
+                backoff = base_backoff * (2 ** (attempt - 1))  # 2, 4, 8
+                logger.info(f"[Retry] {login}: ожидание {backoff:.1f}s перед повтором")
+                time.sleep(backoff)
+
+    # Все попытки исчерпаны — пометить как skipped
+    logger.warning(f"[Retry] {login}: '{quest_id}' пропущен после {max_retries} попыток")
+    return "skipped", last_error, error_dumps
+
+
+# ─── Группы квестов (независимые можно перемешивать) ──────────
+
+# Квесты, которые зависят друг от друга, объединены в группу
+# Внутри группы порядок сохраняется, между группами — рандом
+QUEST_DEPENDENCY_GROUPS = [
+    # Группа 1: Настройка профиля (порядок важен: имя → описание → сохранение)
+    ["setup_avatar", "setup_profile_name", "setup_profile_summary"],
+    # Группа 2: Магазин / обзоры (оценка → отзыв)
+    ["rate_game", "write_review"],
+    # Группа 3: Независимые квесты (каждый сам по себе)
+    ["add_to_wishlist"],
+    ["discovery_queue"],
+    ["join_group"],
+    ["subscribe_workshop"],
+    ["visit_discussions"],
+    # Группа 4: Социальные (добавить друга → комментарий)
+    ["add_friend", "post_comment"],
+    # Группа 5: Фон (независимый)
+    ["setup_profile_background"],
+]
+
+
+def shuffle_quests(quest_ids: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """Рандомизирует порядок групп квестов, сохраняя зависимости внутри групп."""
+    quest_map = {qid: qname for qid, qname in quest_ids}
+    selected_ids = {qid for qid, _ in quest_ids}
+
+    # Собираем группы из выбранных квестов
+    groups: list[list[tuple[str, str]]] = []
+    used = set()
+    for dep_group in QUEST_DEPENDENCY_GROUPS:
+        group_quests = [(qid, quest_map[qid]) for qid in dep_group if qid in selected_ids]
+        if group_quests:
+            groups.append(group_quests)
+            used.update(qid for qid, _ in group_quests)
+
+    # Квесты не из групп — каждый как отдельная группа
+    for qid, qname in quest_ids:
+        if qid not in used:
+            groups.append([(qid, qname)])
+
+    # Перемешиваем группы
+    random.shuffle(groups)
+
+    # Собираем обратно в плоский список
+    result = []
+    for group in groups:
+        result.extend(group)
+    return result
 
 # ─── Рандомные данные для профиля ─────────────────────────────
 
@@ -97,6 +336,8 @@ class QuestStatus:
     quest_name: str
     status: str = "pending"  # pending | running | done | error | skipped
     error: str | None = None
+    retries: int = 0
+    error_dumps: list[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -124,7 +365,10 @@ class AccountWarmupStatus:
             "current_quest": self.current_quest,
             "error": self.error,
             "quests": [
-                {"id": q.quest_id, "name": q.quest_name, "status": q.status, "error": q.error}
+                {
+                    "id": q.quest_id, "name": q.quest_name, "status": q.status,
+                    "error": q.error, "retries": q.retries,
+                }
                 for q in self.quests
             ],
         }
@@ -146,6 +390,9 @@ class WarmupRunner:
         quest_ids: list[str] | None,
         status: AccountWarmupStatus,
         generated_texts: dict | None = None,
+        rate_limiter: RateLimiter | None = None,
+        warmup_timeout: int = 600,
+        max_quest_retries: int = 3,
     ):
         self.login = login
         self.password = password
@@ -153,6 +400,9 @@ class WarmupRunner:
         self.master_steam_id = master_steam_id
         self.proxy_config = proxy_config
         self.status = status
+        self.rate_limiter = rate_limiter
+        self.warmup_timeout = warmup_timeout  # общий timeout в секундах (default: 10 мин)
+        self.max_quest_retries = max_quest_retries
         # LLM-сгенерированные тексты (или fallback)
         self.texts = generated_texts or {}
 
@@ -171,6 +421,12 @@ class WarmupRunner:
         self.status.status = "running"
         logger.info(f"[Warmup] {self.login}: старт ({len(self.quests)} квестов)")
 
+        # Rate limiting — ждём свой слот
+        if self.rate_limiter:
+            logger.info(f"[Warmup] {self.login}: ожидание rate limiter...")
+            self.rate_limiter.wait()
+            logger.info(f"[Warmup] {self.login}: rate limiter пройден")
+
         try:
             pw = sync_playwright().start()
             browser_args = {"headless": False}
@@ -184,8 +440,32 @@ class WarmupRunner:
             # Логин
             self._steam_login(page)
 
+            # Рандомизируем порядок квестов (с учётом зависимостей)
+            shuffled = shuffle_quests(self.quests)
+            # Обновляем статусы в новом порядке
+            self.quests = shuffled
+            self.status.quests = [
+                QuestStatus(quest_id=qid, quest_name=qname) for qid, qname in shuffled
+            ]
+            logger.info(f"[Warmup] {self.login}: порядок квестов: {[q[0] for q in shuffled]}")
+
+            # Общий timeout на весь warmup
+            warmup_start_time = time.time()
+
             # Выполняем квесты
             for i, (quest_id, quest_name) in enumerate(self.quests):
+                # Проверяем общий timeout
+                elapsed = time.time() - warmup_start_time
+                if elapsed > self.warmup_timeout:
+                    logger.warning(
+                        f"[Warmup] {self.login}: общий timeout {self.warmup_timeout}s "
+                        f"превышен ({elapsed:.0f}s), пропускаем оставшиеся квесты"
+                    )
+                    for j in range(i, len(self.quests)):
+                        self.status.quests[j].status = "skipped"
+                        self.status.quests[j].error = "Общий timeout превышен"
+                    break
+
                 qs = self.status.quests[i]
                 qs.status = "running"
                 self.status.current_quest = quest_name
@@ -196,17 +476,28 @@ class WarmupRunner:
                     qs.error = "Не реализован"
                     continue
 
-                try:
-                    logger.info(f"[Warmup] {self.login}: квест '{quest_name}'")
-                    method(page)
-                    qs.status = "done"
-                except Exception as e:
-                    logger.warning(f"[Warmup] {self.login}: квест '{quest_name}' ошибка: {e}")
-                    qs.status = "error"
-                    qs.error = str(e)[:200]
+                logger.info(f"[Warmup] {self.login}: квест '{quest_name}'")
 
-                # Пауза между квестами (имитация человека)
-                time.sleep(random.uniform(1.5, 3.0))
+                # Retry с экспоненциальным backoff
+                status, error, error_dumps = run_quest_with_retry(
+                    quest_method=method,
+                    page=page,
+                    login=self.login,
+                    quest_id=quest_id,
+                    max_retries=self.max_quest_retries,
+                )
+                qs.status = status
+                qs.error = error
+                qs.error_dumps = error_dumps
+                qs.retries = len(error_dumps)
+
+                # Человеческая пауза между квестами (нормальное распределение)
+                delay = human_delay(mean=3.0, std=1.5, min_val=1.0, max_val=8.0)
+                logger.info(f"[Warmup] {self.login}: пауза {delay:.1f}s после '{quest_name}'")
+
+                # Случайные human-like действия между квестами
+                if random.random() < 0.6:
+                    human_actions(page)
 
             self.status.status = "done"
             self.status.current_quest = None

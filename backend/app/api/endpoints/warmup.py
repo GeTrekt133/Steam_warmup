@@ -21,6 +21,7 @@ from app.services.warmup_service import (
     WarmupRunner,
     AccountWarmupStatus,
     QUEST_LIST,
+    get_rate_limiter,
 )
 from app.services.steam_browser import _ensure_proactor
 from app.services import text_generator
@@ -42,6 +43,9 @@ class WarmupStartRequest(BaseModel):
     max_concurrent: int = 2
     proxy_config: dict | None = None  # {server, username?, password?}
     text_prompt: str | None = None    # промпт для LLM-генерации текстов (стиль/тон)
+    max_accounts_per_minute: int = 3  # rate limiting: макс. аккаунтов в минуту
+    warmup_timeout: int = 600         # общий timeout на аккаунт в секундах (default: 10 мин)
+    max_quest_retries: int = 3        # кол-во retry при ошибке квеста
 
 
 class WarmupStopRequest(BaseModel):
@@ -135,6 +139,8 @@ async def _run_warmup(
                 "comment": comments[idx] if idx < len(comments) else None,
             }
 
+            rate_limiter = get_rate_limiter(req.max_accounts_per_minute)
+
             runner = WarmupRunner(
                 login=acc.get("login", ""),
                 password=acc.get("password", ""),
@@ -144,6 +150,9 @@ async def _run_warmup(
                 quest_ids=req.quests,
                 status=status,
                 generated_texts=generated_texts,
+                rate_limiter=rate_limiter,
+                warmup_timeout=req.warmup_timeout,
+                max_quest_retries=req.max_quest_retries,
             )
 
             # Запускаем sync Playwright в отдельном потоке
