@@ -15,7 +15,7 @@ router = APIRouter()
 class SolveRequest(BaseModel):
     sitekey: str = "f5561ba9-8f1e-40ca-9b5b-a0b3f719ef34"  # Steam default
     host: str = "store.steampowered.com"
-    solver: str | None = None  # "groq" or "gemini", None = auto
+    solver: str | None = None  # "ezcaptcha", "capsolver", "groq", "gemini", None = auto
 
 
 @router.post("/solve")
@@ -31,7 +31,7 @@ async def solve_captcha(
         try:
             preferred = SolverType(req.solver)
         except ValueError:
-            return {"error": f"Неизвестный солвер: {req.solver}. Доступны: groq, gemini"}
+            return {"error": f"Неизвестный солвер: {req.solver}. Доступны: ezcaptcha, capsolver, groq, gemini"}
 
     result = await orchestrator.solve(req.sitekey, req.host, preferred)
 

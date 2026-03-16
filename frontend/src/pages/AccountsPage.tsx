@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import api from '@/lib/api'
 import { Button } from '@/components/ui/Button'
 import { Modal, ModalHeader, ModalBody } from '@/components/ui/Modal'
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@/components/ui/Table'
@@ -19,6 +20,7 @@ import {
   ShieldCheck,
   Pickaxe,
   Gift,
+  Wallet,
   Plus,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -31,15 +33,17 @@ interface Account {
   password: string
   maFile: boolean        // есть ли привязанный maFile
   maFileName?: string    // имя файла maFile
+  sharedSecret?: string  // shared_secret из maFile для генерации 2FA кода
+  steamId?: string       // Steam ID (SteamID64) аккаунта
+  balance?: string       // баланс кошелька Steam (например "123,45 pуб.")
+  balanceUsd?: number    // баланс в USD
   addedAt: string        // дата добавления (ISO)
-  steamId?: string       // Steam ID аккаунта
   rank?: number          // ранг аккаунта
   exp?: number           // опыт аккаунта
   status: string         // текущий статус аккаунта (wait, farming, warmup, drop и тд)
   isFarmed: boolean      // аккаунт зафармлен
   isDropCollected: boolean // дроп собран
   dropValue?: number     // сумма дропов в долларах
-  sharedSecret?: string  // shared_secret для Steam Guard
   proxyId?: number       // ID привязанного прокси (из panel_proxies)
 }
 
@@ -73,6 +77,40 @@ function saveAccounts(accounts: Account[]) {
 
 function generateId(): string {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
+}
+
+// ─── Steam Guard 2FA код из shared_secret ─────────────────────
+
+const STEAM_CHARS = '23456789BCDFGHJKMNPQRTVWXY'
+
+async function generateSteamGuardCode(sharedSecret: string): Promise<string> {
+  // Декодируем base64 shared_secret в ключ
+  const keyBytes = Uint8Array.from(atob(sharedSecret), (c) => c.charCodeAt(0))
+
+  // Время: Steam использует 30-секундные интервалы
+  const time = Math.floor(Date.now() / 1000 / 30)
+  const timeBytes = new Uint8Array(8)
+  let t = time
+  for (let i = 7; i >= 0; i--) {
+    timeBytes[i] = t & 0xff
+    t = Math.floor(t / 256)
+  }
+
+  // HMAC-SHA1
+  const key = await crypto.subtle.importKey('raw', keyBytes, { name: 'HMAC', hash: 'SHA-1' }, false, ['sign'])
+  const sig = await crypto.subtle.sign('HMAC', key, timeBytes)
+  const hash = new Uint8Array(sig)
+
+  // Извлекаем 5-символьный код
+  const offset = hash[19] & 0x0f
+  let code = ((hash[offset] & 0x7f) << 24) | (hash[offset + 1] << 16) | (hash[offset + 2] << 8) | hash[offset + 3]
+
+  let result = ''
+  for (let i = 0; i < 5; i++) {
+    result += STEAM_CHARS[code % STEAM_CHARS.length]
+    code = Math.floor(code / STEAM_CHARS.length)
+  }
+  return result
 }
 
 // ─── Главный компонент ───────────────────────────────────────
@@ -244,7 +282,7 @@ export function AccountsPage() {
     for (let i = 0; i < targets.length; i++) {
       const acc = targets[i]
       try {
-        // Определяем прокси: если тумблер включен — берём из пула (round-robin), иначе по proxyId
+        // Определяем прокси: если тумблер включен -- берём из пула (round-robin), иначе по proxyId
         let proxyData = null
         if (useProxies && allProxies.length > 0) {
           const px = acc.proxyId
@@ -301,6 +339,32 @@ export function AccountsPage() {
       console.log(`[drop] Collecting drop for ${acc.login}`)
     }
     setContextMenu(null)
+  }
+
+  async function handleParseBalance(account: Account) {
+    const ids = getTargetIds(account)
+    const targets = accounts.filter((a) => ids.has(a.id))
+    setContextMenu(null)
+    for (const acc of targets) {
+      try {
+        const res = await api.post('/api/accounts/parse-balance', {
+          login: acc.login,
+          password: acc.password,
+          shared_secret: acc.sharedSecret || undefined,
+        }, { timeout: 120000 })
+        if (res.data.success && res.data.balance) {
+          setAccounts((prev) => {
+            const updated = prev.map((a) =>
+              a.id === acc.id ? { ...a, balance: res.data.balance, balanceUsd: res.data.balance_usd ?? undefined } : a
+            )
+            saveAccounts(updated)
+            return updated
+          })
+        }
+      } catch (e: any) {
+        console.error(`[balance] Ошибка для ${acc.login}:`, e.response?.data?.detail || e.message)
+      }
+    }
   }
 
   // Переключение статуса «Зафармлен»
@@ -491,6 +555,7 @@ export function AccountsPage() {
               <TableHead className="w-20">Ранг</TableHead>
               <TableHead className="w-20">EXP</TableHead>
               <TableHead className="w-32">maFile</TableHead>
+              <TableHead className="w-28">Баланс</TableHead>
               <TableHead className="w-28 text-center">Зафармлен</TableHead>
               <TableHead className="w-28 text-center">Дроп собран</TableHead>
               <TableHead className="w-40">Добавлен</TableHead>
@@ -548,6 +613,16 @@ export function AccountsPage() {
                     </span>
                   )}
                 </TableCell>
+                <TableCell className="text-xs font-mono">
+                  {account.balance ? (
+                    <div>
+                      <div>{account.balance}</div>
+                      {account.balanceUsd != null && (
+                        <div className="text-[hsl(var(--muted-foreground))]">${account.balanceUsd.toFixed(2)}</div>
+                      )}
+                    </div>
+                  ) : '—'}
+                </TableCell>
                 <TableCell className="text-center">
                   <input
                     type="checkbox"
@@ -588,7 +663,7 @@ export function AccountsPage() {
             ))}
             {filtered.length === 0 && (
               <TableRow>
-                <TableCell colSpan={12} className="text-center py-8 text-[hsl(var(--muted-foreground))]">
+                <TableCell colSpan={13} className="text-center py-8 text-[hsl(var(--muted-foreground))]">
                   Ничего не найдено
                 </TableCell>
               </TableRow>
@@ -610,6 +685,7 @@ export function AccountsPage() {
           }
           onClose={() => setContextMenu(null)}
           onOpenBrowser={handleOpenInBrowser}
+          onParseBalance={handleParseBalance}
           onCollectDrop={handleCollectDrop}
           onToggleFarmed={handleToggleFarmed}
           onToggleDropCollected={handleToggleDropCollected}
@@ -664,147 +740,110 @@ export function AccountsPage() {
   )
 }
 
-// ─── Steam Guard TOTP генератор ──────────────────────────────
+// ─── Форма добавления одного аккаунта ────────────────────────
 
-const STEAM_CHARS = '23456789BCDFGHJKMNPQRTVWXY'
+function AddSingleAccountForm({
+  existingAccounts,
+  onDone,
+  onCancel,
+}: {
+  existingAccounts: Account[]
+  onDone: (account: Account) => void
+  onCancel: () => void
+}) {
+  const [login, setLogin] = useState('')
+  const [password, setPassword] = useState('')
+  const [sharedSecret, setSharedSecret] = useState('')
+  const [error, setError] = useState('')
 
-function generateSteamGuardCode(sharedSecret: string): string {
-  // Декодируем base64
-  const cleaned = sharedSecret.trim()
-  if (!cleaned) throw new Error('shared_secret пустой')
-  const binaryStr = atob(cleaned)
-  const key = new Uint8Array(binaryStr.length)
-  for (let i = 0; i < binaryStr.length; i++) {
-    key[i] = binaryStr.charCodeAt(i)
-  }
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    setError('')
 
-  // Текущее время / 30 секунд
-  const time = Math.floor(Date.now() / 1000 / 30)
+    const trimmedLogin = login.trim()
+    const trimmedPassword = password.trim()
+    const trimmedSecret = sharedSecret.trim()
 
-  // 8-байтный буфер времени (big-endian)
-  const timeBytes = new Uint8Array(8)
-  let t = time
-  for (let i = 7; i >= 0; i--) {
-    timeBytes[i] = t & 0xff
-    t = Math.floor(t / 256)
-  }
-
-  // HMAC-SHA1 (синхронная реализация для простоты)
-  const hash = hmacSha1(key, timeBytes)
-
-  // Извлекаем 5 символов
-  const offset = hash[19] & 0x0f
-  let code = ((hash[offset] & 0x7f) << 24) |
-    ((hash[offset + 1] & 0xff) << 16) |
-    ((hash[offset + 2] & 0xff) << 8) |
-    (hash[offset + 3] & 0xff)
-
-  let result = ''
-  for (let i = 0; i < 5; i++) {
-    result += STEAM_CHARS[code % STEAM_CHARS.length]
-    code = Math.floor(code / STEAM_CHARS.length)
-  }
-  return result
-}
-
-// Простая реализация HMAC-SHA1
-function hmacSha1(key: Uint8Array, message: Uint8Array): Uint8Array {
-  const blockSize = 64
-
-  let k = key
-  if (k.length > blockSize) {
-    k = sha1(k)
-  }
-  if (k.length < blockSize) {
-    const padded = new Uint8Array(blockSize)
-    padded.set(k)
-    k = padded
-  }
-
-  const ipad = new Uint8Array(blockSize)
-  const opad = new Uint8Array(blockSize)
-  for (let i = 0; i < blockSize; i++) {
-    ipad[i] = k[i] ^ 0x36
-    opad[i] = k[i] ^ 0x5c
-  }
-
-  const inner = new Uint8Array(blockSize + message.length)
-  inner.set(ipad)
-  inner.set(message, blockSize)
-
-  const innerHash = sha1(inner)
-
-  const outer = new Uint8Array(blockSize + 20)
-  outer.set(opad)
-  outer.set(innerHash, blockSize)
-
-  return sha1(outer)
-}
-
-// SHA-1 реализация
-function sha1(data: Uint8Array): Uint8Array {
-  let h0 = 0x67452301
-  let h1 = 0xEFCDAB89
-  let h2 = 0x98BADCFE
-  let h3 = 0x10325476
-  let h4 = 0xC3D2E1F0
-
-  const msgLen = data.length
-  const bitLen = msgLen * 8
-
-  // Паддинг: после 0x80 + нули + 8 байт длины, total кратен 64
-  const padLen = (64 - ((msgLen + 9) % 64)) % 64
-  const totalLen = msgLen + 1 + padLen + 8
-  const padded = new Uint8Array(totalLen)
-  padded.set(data)
-  padded[msgLen] = 0x80
-
-  // Длина в битах (big-endian, 64-bit)
-  const view = new DataView(padded.buffer)
-  view.setUint32(totalLen - 4, bitLen, false)
-
-  const w = new Int32Array(80)
-
-  for (let offset = 0; offset < totalLen; offset += 64) {
-    for (let i = 0; i < 16; i++) {
-      w[i] = view.getInt32(offset + i * 4, false)
-    }
-    for (let i = 16; i < 80; i++) {
-      w[i] = rotl(w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16], 1)
+    if (!trimmedLogin || !trimmedPassword) {
+      setError('Логин и пароль обязательны')
+      return
     }
 
-    let a = h0, b = h1, c = h2, d = h3, e = h4
-
-    for (let i = 0; i < 80; i++) {
-      let f: number, k: number
-      if (i < 20) { f = (b & c) | (~b & d); k = 0x5A827999 }
-      else if (i < 40) { f = b ^ c ^ d; k = 0x6ED9EBA1 }
-      else if (i < 60) { f = (b & c) | (b & d) | (c & d); k = 0x8F1BBCDC }
-      else { f = b ^ c ^ d; k = 0xCA62C1D6 }
-
-      const temp = (rotl(a, 5) + f + e + k + w[i]) | 0
-      e = d; d = c; c = rotl(b, 30); b = a; a = temp
+    if (existingAccounts.some((a) => a.login.toLowerCase() === trimmedLogin.toLowerCase())) {
+      setError('Аккаунт с таким логином уже существует')
+      return
     }
 
-    h0 = (h0 + a) | 0
-    h1 = (h1 + b) | 0
-    h2 = (h2 + c) | 0
-    h3 = (h3 + d) | 0
-    h4 = (h4 + e) | 0
+    const account: Account = {
+      id: generateId(),
+      login: trimmedLogin,
+      password: trimmedPassword,
+      maFile: !!trimmedSecret,
+      addedAt: new Date().toISOString(),
+      status: 'waiting',
+      isFarmed: false,
+      isDropCollected: false,
+      sharedSecret: trimmedSecret || undefined,
+    }
+
+    onDone(account)
   }
 
-  const result = new Uint8Array(20)
-  const rv = new DataView(result.buffer)
-  rv.setUint32(0, h0, false)
-  rv.setUint32(4, h1, false)
-  rv.setUint32(8, h2, false)
-  rv.setUint32(12, h3, false)
-  rv.setUint32(16, h4, false)
-  return result
-}
+  return (
+    <form onSubmit={handleSubmit} className="space-y-4">
+      <div>
+        <label className="block text-sm font-medium mb-1">Логин *</label>
+        <input
+          type="text"
+          value={login}
+          onChange={(e) => setLogin(e.target.value)}
+          placeholder="steam_login"
+          className="w-full rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[hsl(var(--ring))] placeholder:text-[hsl(var(--muted-foreground)/0.5)]"
+          autoFocus
+        />
+      </div>
+      <div>
+        <label className="block text-sm font-medium mb-1">Пароль *</label>
+        <input
+          type="text"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          placeholder="password123"
+          className="w-full rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[hsl(var(--ring))] placeholder:text-[hsl(var(--muted-foreground)/0.5)]"
+        />
+      </div>
+      <div>
+        <label className="block text-sm font-medium mb-1">Shared Secret</label>
+        <input
+          type="text"
+          value={sharedSecret}
+          onChange={(e) => setSharedSecret(e.target.value)}
+          placeholder="wGJfMHAHEh0DTYV8EFZfTdkGUbE="
+          className="w-full rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[hsl(var(--ring))] placeholder:text-[hsl(var(--muted-foreground)/0.5)]"
+        />
+        <p className="text-xs text-[hsl(var(--muted-foreground))] mt-1">
+          Необязательно. Если указан — аккаунт будет отмечен как имеющий 2FA
+        </p>
+      </div>
 
-function rotl(n: number, s: number): number {
-  return ((n << s) | (n >>> (32 - s))) | 0
+      {error && (
+        <div className="text-sm text-[hsl(var(--destructive))] bg-[hsl(var(--destructive)/0.1)] border border-[hsl(var(--destructive)/0.2)] rounded-md px-3 py-2 flex items-center gap-2">
+          <AlertCircle className="h-4 w-4 flex-shrink-0" />
+          {error}
+        </div>
+      )}
+
+      <div className="flex justify-end gap-2 pt-2">
+        <Button type="button" variant="ghost" onClick={onCancel}>
+          Отмена
+        </Button>
+        <Button type="submit">
+          <Plus className="h-4 w-4" />
+          Добавить
+        </Button>
+      </div>
+    </form>
+  )
 }
 
 // ─── Контекстное меню аккаунта ────────────────────────────────
@@ -816,6 +855,7 @@ function AccountContextMenu({
   allTargets,
   onClose,
   onOpenBrowser,
+  onParseBalance,
   onCollectDrop,
   onToggleFarmed,
   onToggleDropCollected,
@@ -827,6 +867,7 @@ function AccountContextMenu({
   allTargets: Account[]
   onClose: () => void
   onOpenBrowser: (acc: Account) => void
+  onParseBalance: (acc: Account) => void
   onCollectDrop: (acc: Account) => void
   onToggleFarmed: (acc: Account) => void
   onToggleDropCollected: (acc: Account) => void
@@ -883,32 +924,17 @@ function AccountContextMenu({
       onClick: () => copyToClipboard(allTargets.map((a) => `${a.login}:${a.password}`).join('\n'), 'loginpass'),
     },
     {
-      label: multi ? `Копировать Steam Guard (${allTargets.filter((a) => a.sharedSecret).length})` : 'Копировать Steam Guard код',
+      label: 'Копировать 2FA',
       icon: ShieldCheck,
-      onClick: () => {
-        const targets = allTargets.filter((a) => a.sharedSecret)
-        if (targets.length === 1) {
-          // Для одного аккаунта копируем только код (без логина)
-          try {
-            const code = generateSteamGuardCode(targets[0].sharedSecret!)
-            copyToClipboard(code, '2fa')
-          } catch (e) {
-            console.error('Steam Guard error:', e)
-            copyToClipboard('Ошибка генерации кода', '2fa')
-          }
-        } else {
-          const codes = targets
-            .map((a) => {
-              try {
-                return `${a.login}: ${generateSteamGuardCode(a.sharedSecret!)}`
-              } catch (e) {
-                console.error('Steam Guard error for', a.login, ':', e)
-                return `${a.login}: ОШИБКА`
-              }
-            })
-            .join('\n')
-          copyToClipboard(codes, '2fa')
-        }
+      onClick: async () => {
+        const withSecret = allTargets.filter((a) => a.sharedSecret)
+        const codes = await Promise.all(
+          withSecret.map(async (a) => {
+            const code = await generateSteamGuardCode(a.sharedSecret!)
+            return withSecret.length > 1 ? `${a.login}:${code}` : code
+          })
+        )
+        copyToClipboard(codes.join('\n'), '2fa')
       },
       disabled: !allTargets.some((a) => a.sharedSecret),
     },
@@ -917,6 +943,11 @@ function AccountContextMenu({
       label: 'Открыть в браузере',
       icon: Globe,
       onClick: () => onOpenBrowser(account),
+    },
+    {
+      label: multi ? `Обновить баланс (${allTargets.length})` : 'Обновить баланс',
+      icon: Wallet,
+      onClick: () => onParseBalance(account),
     },
     {
       label: 'Собрать дроп',
@@ -973,11 +1004,7 @@ function AccountContextMenu({
           (item.label === 'Копировать логин' && copiedField === 'login') ||
           (item.label === 'Копировать пароль' && copiedField === 'password') ||
           (item.label === 'Копировать логин:пароль' && copiedField === 'loginpass') ||
-          (item.label === 'Копировать Steam Guard код' && copiedField === '2fa') ||
-          (item.label.startsWith('Копировать логины') && copiedField === 'login') ||
-          (item.label.startsWith('Копировать пароли') && copiedField === 'password') ||
-          (item.label.startsWith('Копировать логин:пароль') && copiedField === 'loginpass') ||
-          (item.label.startsWith('Копировать Steam Guard') && copiedField === '2fa')
+          (item.label === 'Копировать 2FA' && copiedField === '2fa')
 
         return (
           <button
@@ -1127,6 +1154,9 @@ function ImportWizardContent({ onDone, onCancel, existingAccounts }: ImportWizar
               account.maFileName = accountName + '.maFile'
               if (json.shared_secret) {
                 account.sharedSecret = json.shared_secret
+              }
+              if (json.Session?.SteamID) {
+                account.steamId = String(json.Session.SteamID)
               }
               matched++
             }
@@ -1330,112 +1360,6 @@ function ImportWizardContent({ onDone, onCancel, existingAccounts }: ImportWizar
         </div>
       )}
     </div>
-  )
-}
-
-// ─── Форма добавления одного аккаунта ────────────────────────
-
-function AddSingleAccountForm({
-  existingAccounts,
-  onDone,
-  onCancel,
-}: {
-  existingAccounts: Account[]
-  onDone: (account: Account) => void
-  onCancel: () => void
-}) {
-  const [login, setLogin] = useState('')
-  const [password, setPassword] = useState('')
-  const [sharedSecret, setSharedSecret] = useState('')
-  const [error, setError] = useState('')
-
-  function handleSubmit(e: React.FormEvent) {
-    e.preventDefault()
-    setError('')
-
-    const trimmedLogin = login.trim()
-    const trimmedPassword = password.trim()
-    const trimmedSecret = sharedSecret.trim()
-
-    if (!trimmedLogin || !trimmedPassword) {
-      setError('Логин и пароль обязательны')
-      return
-    }
-
-    if (existingAccounts.some((a) => a.login.toLowerCase() === trimmedLogin.toLowerCase())) {
-      setError('Аккаунт с таким логином уже существует')
-      return
-    }
-
-    const account: Account = {
-      id: generateId(),
-      login: trimmedLogin,
-      password: trimmedPassword,
-      maFile: !!trimmedSecret,
-      addedAt: new Date().toISOString(),
-      status: 'waiting',
-      isFarmed: false,
-      isDropCollected: false,
-      sharedSecret: trimmedSecret || undefined,
-    }
-
-    onDone(account)
-  }
-
-  return (
-    <form onSubmit={handleSubmit} className="space-y-4">
-      <div>
-        <label className="block text-sm font-medium mb-1">Логин *</label>
-        <input
-          type="text"
-          value={login}
-          onChange={(e) => setLogin(e.target.value)}
-          placeholder="steam_login"
-          className="w-full rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[hsl(var(--ring))] placeholder:text-[hsl(var(--muted-foreground)/0.5)]"
-          autoFocus
-        />
-      </div>
-      <div>
-        <label className="block text-sm font-medium mb-1">Пароль *</label>
-        <input
-          type="text"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          placeholder="password123"
-          className="w-full rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[hsl(var(--ring))] placeholder:text-[hsl(var(--muted-foreground)/0.5)]"
-        />
-      </div>
-      <div>
-        <label className="block text-sm font-medium mb-1">Shared Secret</label>
-        <input
-          type="text"
-          value={sharedSecret}
-          onChange={(e) => setSharedSecret(e.target.value)}
-          placeholder="wGJfMHAHEh0DTYV8EFZfTdkGUbE="
-          className="w-full rounded-md border border-[hsl(var(--input))] bg-[hsl(var(--background))] px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-[hsl(var(--ring))] placeholder:text-[hsl(var(--muted-foreground)/0.5)]"
-        />
-        <p className="text-xs text-[hsl(var(--muted-foreground))] mt-1">
-          Необязательно. Если указан — аккаунт будет отмечен как имеющий 2FA
-        </p>
-      </div>
-
-      {error && (
-        <div className="text-sm text-[hsl(var(--destructive))] bg-[hsl(var(--destructive)/0.1)] border border-[hsl(var(--destructive)/0.2)] rounded-md px-3 py-2 flex items-center gap-2">
-          <AlertCircle className="h-4 w-4 flex-shrink-0" />
-          {error}
-        </div>
-      )}
-
-      <div className="flex justify-end gap-2 pt-2">
-        <Button type="button" variant="ghost" onClick={onCancel}>
-          Отмена
-        </Button>
-        <Button type="submit">
-          <Plus className="h-4 w-4" />
-          Добавить
-        </Button>
-      </div>
-    </form>
   )
 }
 

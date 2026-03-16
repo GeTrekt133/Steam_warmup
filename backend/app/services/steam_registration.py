@@ -54,6 +54,7 @@ class RegContext:
     sitekey: str = STEAM_SITEKEY
     captcha_token: str = ""
     creation_id: str = ""
+    init_id: str = ""
 
     # Результат
     success: bool = False
@@ -74,10 +75,27 @@ def _create_session(proxy: dict | None = None) -> requests.Session:
         "User-Agent": USER_AGENT,
         "Accept-Language": "en-US,en;q=0.9",
         "Accept": "application/json, text/plain, */*",
+        "Referer": f"{STEAM_STORE}/join",
     })
     if proxy:
         session.proxies = proxy
     return session
+
+
+def _step_init_session(ctx: RegContext, session: requests.Session) -> None:
+    """Шаг 0: Зайти на /join для получения cookies и init_id."""
+    try:
+        import re
+        resp = session.get(f"{STEAM_STORE}/join", timeout=30)
+        resp.raise_for_status()
+        # Извлекаем init_id из HTML
+        match = re.search(r'id="init_id"[^>]*value="([^"]+)"', resp.text)
+        if match:
+            ctx.init_id = match.group(1)
+        logger.info("Session initialized, init_id=%s, cookies=%s",
+                     ctx.init_id, list(session.cookies.keys()))
+    except Exception as e:
+        logger.warning("Failed to init session: %s", e)
 
 
 def _step_get_captcha(ctx: RegContext, session: requests.Session) -> None:
@@ -85,8 +103,9 @@ def _step_get_captcha(ctx: RegContext, session: requests.Session) -> None:
     step = ctx._step("captcha_init")
     step.status = "running"
     try:
-        resp = session.get(
-            f"{STEAM_STORE}/join/refreshcaptcha/?count=1",
+        resp = session.post(
+            f"{STEAM_STORE}/join/refreshcaptcha/",
+            data={"count": "1", "hcaptcha": "1"},
             timeout=30,
         )
         resp.raise_for_status()
@@ -94,8 +113,8 @@ def _step_get_captcha(ctx: RegContext, session: requests.Session) -> None:
         ctx.captcha_gid = str(data.get("gid", ""))
         ctx.sitekey = data.get("sitekey", STEAM_SITEKEY)
         step.status = "done"
-        step.detail = f"gid={ctx.captcha_gid}"
-        logger.info("Got captcha GID: %s", ctx.captcha_gid)
+        step.detail = f"gid={ctx.captcha_gid}, sitekey={ctx.sitekey[:16]}..."
+        logger.info("Got captcha GID: %s, sitekey: %s", ctx.captcha_gid, ctx.sitekey)
     except Exception as e:
         step.status = "error"
         step.detail = str(e)
@@ -113,6 +132,9 @@ def _step_verify_email(
             "captcha_text": ctx.captcha_token,
             "captchagid": ctx.captcha_gid,
             "email": ctx.email,
+            "elang": "0",
+            "init_id": ctx.init_id,
+            "guest": "0",
         }
         resp = session.post(
             f"{STEAM_STORE}/join/ajaxverifyemail",
@@ -243,24 +265,39 @@ async def register_single_account(
     session = _create_session(proxy)
 
     try:
-        # 1. Получить captcha challenge
-        await loop.run_in_executor(None, _step_get_captcha, ctx, session)
+        # 0. Инициализация сессии (cookies + init_id)
+        await loop.run_in_executor(None, _step_init_session, ctx, session)
 
-        # 2. Решить captcha
-        step_captcha = ctx._step("captcha_solve")
-        step_captcha.status = "running"
-        captcha_result = await orchestrator.solve(ctx.sitekey)
-        if not captcha_result.success:
-            step_captcha.status = "error"
-            step_captcha.detail = captcha_result.error
-            ctx.error = f"Captcha не решена: {captcha_result.error}"
-            return ctx
-        ctx.captcha_token = captcha_result.token
-        step_captcha.status = "done"
-        step_captcha.detail = f"solver={captcha_result.solver.value}, {captcha_result.elapsed_sec:.1f}s"
+        # 1-3. Captcha + verify email (с retry если токен отклонён)
+        max_captcha_retries = 3
+        for captcha_attempt in range(max_captcha_retries):
+            # 1. Получить captcha challenge
+            await loop.run_in_executor(None, _step_get_captcha, ctx, session)
 
-        # 3. Отправить email на верификацию
-        await loop.run_in_executor(None, _step_verify_email, ctx, session)
+            # 2. Решить captcha
+            step_captcha = ctx._step("captcha_solve")
+            step_captcha.status = "running"
+            captcha_result = await orchestrator.solve(ctx.sitekey)
+            if not captcha_result.success:
+                step_captcha.status = "error"
+                step_captcha.detail = captcha_result.error
+                ctx.error = f"Captcha не решена: {captcha_result.error}"
+                return ctx
+            ctx.captcha_token = captcha_result.token
+            step_captcha.status = "done"
+            step_captcha.detail = f"solver={captcha_result.solver.value}, {captcha_result.elapsed_sec:.1f}s"
+
+            # 3. Отправить email на верификацию
+            try:
+                await loop.run_in_executor(None, _step_verify_email, ctx, session)
+                break  # Успех — выходим из retry
+            except Exception as e:
+                error_msg = str(e).lower()
+                if "captcha" in error_msg and captcha_attempt < max_captcha_retries - 1:
+                    logger.warning("Captcha rejected by Steam, retrying (%d/%d)...",
+                                   captcha_attempt + 1, max_captcha_retries)
+                    continue
+                raise
 
         # 4. Получить confirmation link из IMAP
         step_imap = ctx._step("email_fetch")
