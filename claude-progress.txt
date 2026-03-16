@@ -1,0 +1,58 @@
+# Claude Autonomous Progress — Warmup & Farming Improvements
+# Branch: dev/autonomous-setup
+# Updated: 2026-03-16
+
+## Самодиагностика
+- Backend (localhost:8420): OK
+- ASF (localhost:1242): DOWN (не критично для задач 1-2)
+- DB (SQLAlchemy + aiosqlite): OK
+- Playwright (chromium): OK
+
+## Задача 1: Антибан для Warmup — DONE
+Статус: уже реализовано до начала работы, верифицировано тестами.
+
+Что есть:
+- human_delay(): нормальное распределение (mean=3, std=1.5, min=1, max=8)
+- human_actions(): скролл, движение мыши, клик в пустую область (60% шанс между квестами)
+- shuffle_quests(): рандомизация порядка групп, зависимости внутри групп сохранены
+- RateLimiter: ограничение запусков в минуту с одного IP (thread-safe)
+- proxy_config: параметр готов, реализация пропущена (нет прокси)
+
+Верификация:
+- 9/9 unit tests passed (test_antiban.py)
+- 2/2 live tests passed (test_antiban.py)
+  - Задержки рандомные: min=1.00s, max=6.14s, mean=3.39s, std=1.27s
+  - Human-like действия выполнены 5 раз в реальном браузере
+- Proxy не тестирован (нет доступного proxy)
+
+## Задача 2: Retry и обработка ошибок — DONE
+Статус: реализовано и верифицировано.
+
+Что сделано:
+- run_quest_with_retry(): retry до 3 раз с экспоненциальным backoff (2, 4, 8 сек)
+- PlaywrightTimeout получает 1.5x более длинный backoff
+- После 3 фейлов квест помечается как "skipped", остальные продолжаются
+- save_error_dump(): скриншот (PNG) + HTML dump при каждой ошибке
+- Файлы сохраняются в backend/error_dumps/
+- Общий timeout на warmup аккаунта (default: 10 мин), пропускает оставшиеся квесты
+- QuestStatus хранит retries count и error_dumps
+- API принимает warmup_timeout и max_quest_retries параметры
+
+Верификация:
+- 11/11 unit tests passed (test_retry.py)
+- 4/4 live tests passed (test_retry.py):
+  - Retry сработал: квест выполнен с 3й попытки
+  - После 3 фейлов квест помечен как skipped
+  - Screenshot + HTML dump файлы созданы
+  - Backoff экспоненциальный: gap1=1.08s, gap2=2.05s
+
+## Задача 3: Smart Farming — NOT STARTED
+## Задача 4: Персистентность сессий — NOT STARTED
+## Задача 5: Оптимизация таймингов — NOT STARTED
+
+## Коммиты
+- e1b0ffc: Add retry logic, error dumps, and overall timeout for warmup quests (Tasks 1+2)
+
+## Тесты — итого
+- Unit tests: 21/21 passed (test_antiban: 9, test_retry: 11, test_health: 1)
+- Live tests: 6/6 passed (antiban: 2, retry: 4)
