@@ -10,6 +10,11 @@ import {
   AlertCircle,
   Clock,
   Loader2,
+  RefreshCw,
+  SkipForward,
+  Timer,
+  RotateCcw,
+  Download,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -25,6 +30,7 @@ interface QuestStatus {
   name: string
   status: 'pending' | 'running' | 'done' | 'error' | 'skipped'
   error: string | null
+  retries: number
 }
 
 interface AccountStatus {
@@ -66,6 +72,9 @@ export function WarmupPage() {
   const [maxConcurrent, setMaxConcurrent] = useState(2)
   const [textPrompt, setTextPrompt] = useState('')
 
+  const [warmupTimeout, setWarmupTimeout] = useState(600)
+  const [maxQuestRetries, setMaxQuestRetries] = useState(3)
+
   const [taskId, setTaskId] = useState<string | null>(null)
   const [task, setTask] = useState<WarmupTask | null>(null)
   const [startLoading, setStartLoading] = useState(false)
@@ -74,6 +83,7 @@ export function WarmupPage() {
   // ─── Загрузка ─────────────────────────────────────────────
 
   useEffect(() => {
+    // Загрузить аккаунты из localStorage (содержат пароли/секреты)
     try {
       const raw = localStorage.getItem('steam_accounts')
       setAccounts(raw ? JSON.parse(raw) : [])
@@ -147,6 +157,8 @@ export function WarmupPage() {
         quests: Array.from(selectedQuests),
         max_concurrent: maxConcurrent,
         text_prompt: textPrompt || undefined,
+        warmup_timeout: warmupTimeout,
+        max_quest_retries: maxQuestRetries,
       })
       setTaskId(res.data.task_id)
       setTask(null)
@@ -265,6 +277,39 @@ export function WarmupPage() {
             </div>
           </div>
 
+          {/* Настройки антибана */}
+          <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4">
+            <h2 className="mb-3 font-semibold">Настройки надёжности</h2>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="mb-1 block text-xs text-[hsl(var(--muted-foreground))]">
+                  <Timer className="mr-1 inline h-3 w-3" />
+                  Timeout на аккаунт (сек)
+                </label>
+                <input
+                  type="number" min={60} max={3600} value={warmupTimeout}
+                  onChange={(e) => setWarmupTimeout(Number(e.target.value))}
+                  className="w-full rounded-md border border-[hsl(var(--border-strong))] bg-[hsl(var(--input))] px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-[hsl(var(--ring))]"
+                />
+                <span className="text-[10px] text-[hsl(var(--muted-foreground))]">{Math.floor(warmupTimeout / 60)} мин</span>
+              </div>
+              <div>
+                <label className="mb-1 block text-xs text-[hsl(var(--muted-foreground))]">
+                  <RotateCcw className="mr-1 inline h-3 w-3" />
+                  Макс. retry на квест
+                </label>
+                <div className="flex items-center gap-2">
+                  {[1, 2, 3, 5].map((n) => (
+                    <button key={n} onClick={() => setMaxQuestRetries(n)} className={cn(
+                      'h-8 w-8 rounded-md text-sm font-medium transition-colors',
+                      maxQuestRetries === n ? 'bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))]' : 'bg-[hsl(var(--muted))] hover:bg-[hsl(var(--accent))]'
+                    )}>{n}</button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+
           {/* Кнопки */}
           <div className="flex gap-3">
             <Button size="lg" className="flex-1" loading={startLoading} disabled={selectedIds.size === 0 || isRunning} onClick={handleStart}>
@@ -311,14 +356,22 @@ export function WarmupPage() {
                   </div>
                   <div className="flex flex-wrap gap-1">
                     {acc.quests.map((q) => (
-                      <span key={q.id} title={q.error ?? q.name} className={cn(
-                        'inline-block rounded px-1.5 py-0.5 text-[10px]',
+                      <span key={q.id} title={q.error ? `${q.name}: ${q.error}` : q.name} className={cn(
+                        'inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px]',
                         q.status === 'done' && 'bg-green-500/20 text-green-400',
                         q.status === 'running' && 'bg-blue-500/20 text-blue-400',
                         q.status === 'error' && 'bg-red-500/20 text-red-400',
                         q.status === 'skipped' && 'bg-yellow-500/20 text-yellow-400',
                         q.status === 'pending' && 'bg-[hsl(var(--muted))] text-[hsl(var(--muted-foreground))]',
-                      )}>{q.name}</span>
+                      )}>
+                        {q.status === 'skipped' && <SkipForward className="h-2.5 w-2.5" />}
+                        {q.name}
+                        {q.retries > 0 && (
+                          <span className="ml-0.5 flex items-center gap-0.5 opacity-75">
+                            <RotateCcw className="h-2 w-2" />{q.retries}
+                          </span>
+                        )}
+                      </span>
                     ))}
                   </div>
                 </div>
@@ -339,10 +392,11 @@ export function WarmupPage() {
             <ul className="space-y-1">
               <li>• Для каждого аккаунта открывается браузер Playwright</li>
               <li>• Автологин через shared_secret (2FA)</li>
-              <li>• Последовательно выполняются квесты Community Badge</li>
+              <li>• Квесты выполняются группами с рандомными паузами</li>
+              <li>• При ошибке — автоматический retry (до {maxQuestRetries}x)</li>
               <li>• Мастер-аккаунт нужен для комментариев и друзей</li>
-              <li>• Целевое время: ~4 мин на аккаунт</li>
-              <li>• После всех квестов — профиль выглядит как живой</li>
+              <li>• Timeout: {Math.floor(warmupTimeout / 60)} мин на аккаунт</li>
+              <li>• Human-like задержки и действия (антибан)</li>
             </ul>
           </div>
         </div>
@@ -355,5 +409,6 @@ function StatusBadge({ status }: { status: string }) {
   if (status === 'done') return <span className="inline-flex items-center gap-1 rounded-full bg-green-500/20 px-2 py-0.5 text-xs text-green-400"><CheckCircle className="h-3 w-3" /> Готово</span>
   if (status === 'running') return <span className="inline-flex items-center gap-1 rounded-full bg-blue-500/20 px-2 py-0.5 text-xs text-blue-400"><Loader2 className="h-3 w-3 animate-spin" /> Выполняется</span>
   if (status === 'error') return <span className="inline-flex items-center gap-1 rounded-full bg-red-500/20 px-2 py-0.5 text-xs text-red-400"><AlertCircle className="h-3 w-3" /> Ошибка</span>
+  if (status === 'skipped') return <span className="inline-flex items-center gap-1 rounded-full bg-yellow-500/20 px-2 py-0.5 text-xs text-yellow-400"><SkipForward className="h-3 w-3" /> Пропущен</span>
   return <span className="inline-flex items-center gap-1 rounded-full bg-[hsl(var(--muted))] px-2 py-0.5 text-xs text-[hsl(var(--muted-foreground))]"><Clock className="h-3 w-3" /> Ожидание</span>
 }
