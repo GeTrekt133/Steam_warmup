@@ -96,52 +96,64 @@ Steam Farming Panel — десктопное приложение для мас�
 
 ### Как тестировать:
 
+### Как тестировать — MCP Playwright + Python live-тесты:
+
+У тебя подключён MCP сервер Playwright. Используй его для визуальной верификации каждой задачи:
+
+**Шаблон тестирования через MCP Playwright:**
+1. Открой браузер через MCP Playwright tool (вызов `browser_navigate`)
+2. Перейди на нужную страницу (steamcommunity.com)
+3. Сделай скриншот (`browser_screenshot`) — убедись что страница загрузилась
+4. Выполни действия (клики, ввод текста)
+5. Сделай скриншот результата — сохрани как доказательство
+
 **Задача 1 (Антибан):**
-- Написать скрипт `backend/tests/live/test_antiban.py`
-- Запустить Playwright браузер **без proxy** (прокси пока нет)
-- Проверить что задержки действительно рандомные (залогировать тайминги)
-- Проверить что human-like действия выполняются (скролл, движение мыши)
-- Визуально убедиться в headful-режиме: `playwright.chromium.launch(headless=False)`
+- MCP Playwright: открой steamcommunity.com, выполни 2-3 квеста, скриншоты до/после каждого
+- Python live-тест `backend/tests/live/test_antiban.py`: запусти с `headless=False`, залогируй тайминги задержек
+- Проверь что задержки рандомные (мин/макс/среднее в логе)
+- Проверь human-like действия визуально (скролл, движение мыши)
 
 **Задача 2 (Retry):**
-- Написать скрипт `backend/tests/live/test_retry.py`
-- Эмулировать ошибку квеста (например, неправильный URL) и убедиться что retry срабатывает
-- Проверить что screenshot/HTML dump создаётся при ошибке
-- Проверить что после 3 фейлов квест помечается как `skipped` и остальные продолжаются
+- MCP Playwright: намеренно перейди на несуществующую страницу, скриншот ошибки
+- Python live-тест `backend/tests/live/test_retry.py`: эмулируй ошибку квеста, проверь retry
+- Проверь что screenshot/HTML dump создаётся при ошибке
+- Проверь что после 3 фейлов квест → `skipped`, остальные продолжаются
 
 **Задача 3 (Smart Farming):**
-- Написать скрипт `backend/tests/live/test_smart_farming.py`
-- Запустить Smart Farming в ускоренном режиме (короткие интервалы для теста)
-- Проверить что перерывы срабатывают (лог: "pausing for X minutes")
-- Проверить ротацию игр (лог: "switching games from [...] to [...]")
-- Убедиться что ASF IPC команды отправляются корректно (или замокать если ASF не запущен)
+- Python live-тест `backend/tests/live/test_smart_farming.py` с ускоренными интервалами
+- Проверь через ASF IPC что farming запустился (`curl http://localhost:1242/Api/Command` → `status`)
+- Проверь что перерывы и ротация игр срабатывают (логи)
 
 **Задача 4 (Персистентность):**
-- Написать скрипт `backend/tests/live/test_persistence.py`
-- Создать сессию → проверить что записалась в БД
-- Имитировать "рестарт" (пересоздать сервис) → проверить что сессия восстановилась
-- Alembic миграция должна пройти без ошибок: `alembic upgrade head`
+- Python live-тест `backend/tests/live/test_persistence.py`
+- Создай сессию → проверь в БД → "перезапусти" сервис → проверь восстановление
+- `alembic upgrade head` должен пройти без ошибок
 
-**Задача 5 (Оптимизация таймингов):**
-- Написать скрипт `backend/tests/live/test_warmup_timing.py`
-- Запустить warmup одного тестового аккаунта в headful-режиме
-- Залогировать тайминги каждого этапа (browser warmup → quest groups → pauses)
-- Сравнить с предыдущими таймингами — убедиться что параллельные группы быстрее
+**Задача 5 (Тайминги):**
+- MCP Playwright: запусти полный warmup 1 аккаунта, делай скриншоты каждого этапа
+- Python live-тест `backend/tests/live/test_warmup_timing.py` с `headless=False`
+- Замерь время: browser warmup → каждая группа квестов → паузы между группами
 
-### Формат live-тестов:
+### Формат Python live-тестов:
 
 ```python
 # backend/tests/live/test_example.py
 """
-Live test — запускать вручную: python -m pytest backend/tests/live/ -v -s
-Требует: запущенный backend, доступ к Steam (опционально)
+Live test — запускать: python -m pytest backend/tests/live/ -v -s
+ВАЖНО: headless=False — браузер должен быть ВИДИМЫМ
 """
 import pytest
+from playwright.sync_api import sync_playwright
 
 @pytest.mark.live
-async def test_something():
-    # Тест с реальным Playwright/ASF
-    ...
+def test_something():
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=False, slow_mo=500)
+        page = browser.new_page()
+        page.goto("https://steamcommunity.com")
+        page.screenshot(path="test_evidence.png")
+        # ... тест ...
+        browser.close()
 ```
 
 ### Структура отчёта после каждой задачи:
@@ -221,6 +233,34 @@ resp = await httpx.AsyncClient().post("http://localhost:1242/Api/Command", json=
    - Если тест падает — исправь и повтори
    - Коммит с отчётом верификации
 4. **Не застревай**: если live-тест не проходит после 3 попыток — коммить что есть с пометкой `WIP`, переходи к следующей задаче
+
+## Progress Tracking
+
+**ОБЯЗАТЕЛЬНО:** после каждой завершённой задачи (или при приближении к лимиту контекста) обнови файл `claude-progress.txt` в корне проекта:
+
+```
+## Последнее обновление: [дата-время]
+## Ветка: dev/autonomous-setup
+
+### Выполнено:
+- [x] Задача 1: Антибан — рандомизация таймингов, human-like паузы
+- [x] Задача 2: Retry логика — 3 попытки, exponential backoff
+
+### В процессе:
+- [ ] Задача 3: Smart Farming — создан smart_farming.py, не дописан scheduler
+
+### Не начато:
+- [ ] Задача 4: Персистентность сессий
+- [ ] Задача 5: Оптимизация таймингов
+
+### Заметки для следующей сессии:
+- В warmup_service.py добавлен HumanSimulator class (строка 45)
+- smart_farming.py: scheduler готов, нужно дописать game rotation (строка 120)
+- Live-тест test_antiban.py проходит, test_smart_farming.py — WIP
+```
+
+Это нужно чтобы следующий запуск с `--continue` мог продолжить с того же места.
+Если чувствуешь что контекст заканчивается — сохрани прогресс и заверши сессию.
 
 ## Критерии успеха
 
