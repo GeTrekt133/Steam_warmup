@@ -74,6 +74,7 @@ export function WarmupPage() {
 
   const [warmupTimeout, setWarmupTimeout] = useState(600)
   const [maxQuestRetries, setMaxQuestRetries] = useState(3)
+  const [friendRequestsCount, setFriendRequestsCount] = useState(3)
 
   const [taskId, setTaskId] = useState<string | null>(null)
   const [task, setTask] = useState<WarmupTask | null>(null)
@@ -159,6 +160,7 @@ export function WarmupPage() {
         text_prompt: textPrompt || undefined,
         warmup_timeout: warmupTimeout,
         max_quest_retries: maxQuestRetries,
+        friend_requests_count: friendRequestsCount,
       })
       setTaskId(res.data.task_id)
       setTask(null)
@@ -305,6 +307,17 @@ export function WarmupPage() {
                       maxQuestRetries === n ? 'bg-[hsl(var(--primary))] text-[hsl(var(--primary-foreground))]' : 'bg-[hsl(var(--muted))] hover:bg-[hsl(var(--accent))]'
                     )}>{n}</button>
                   ))}
+                </div>
+              </div>
+              <div>
+                <label className="mb-1 block text-xs text-[hsl(var(--muted-foreground))]">
+                  <Users className="mr-1 inline h-3 w-3" />
+                  Заявок в друзья
+                </label>
+                <div className="flex items-center gap-2">
+                  <button onClick={() => setFriendRequestsCount(Math.max(1, friendRequestsCount - 1))} className="h-8 w-8 rounded-md text-sm font-medium bg-[hsl(var(--muted))] hover:bg-[hsl(var(--accent))] transition-colors">−</button>
+                  <input type="number" min={1} max={30} value={friendRequestsCount} onChange={(e) => setFriendRequestsCount(Math.max(1, Math.min(30, Number(e.target.value) || 1)))} className="h-8 w-14 rounded-md bg-[hsl(var(--muted))] text-center text-sm font-medium border-none outline-none" />
+                  <button onClick={() => setFriendRequestsCount(Math.min(30, friendRequestsCount + 1))} className="h-8 w-8 rounded-md text-sm font-medium bg-[hsl(var(--muted))] hover:bg-[hsl(var(--accent))] transition-colors">+</button>
                 </div>
               </div>
             </div>

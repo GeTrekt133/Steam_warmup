@@ -183,25 +183,29 @@ def _fetch_code_from_imap(
 
 
 # Паттерн для Steam Guard email-кода (5 символов, приходит при логине)
+# Ищем код после характерных фраз, код должен быть отдельным словом (word boundary)
 _LOGIN_CODE_PATTERN = re.compile(
     r"(?:"
-    r"login\s*code"
-    r"|код\s*(?:для\s*)?входа"
-    r"|guard\s*code"
-    r"|account\s*access\s*code"
-    r")[:\s]*([A-Z0-9]{5})",
+    r"Steam\s*Guard\s*code[^A-Z0-9]*"
+    r"|login\s*code[^A-Z0-9]*"
+    r"|код\s*(?:для\s*)?входа[^A-Z0-9]*"
+    r"|access\s*(?:your\s*)?account[^A-Z0-9]*"
+    r")(\b[A-Z0-9]{5}\b)",
     re.IGNORECASE,
 )
 
 # Паттерн для кода активации authenticator (приходит после AddAuthenticator)
 _ACTIVATION_CODE_PATTERN = re.compile(
     r"(?:"
-    r"activation\s*code"
-    r"|код\s*активации"
-    r"|confirmation\s*code"
-    r"|verify.*?code"
-    r"|your\s*code\s*is"
-    r")[:\s]*([A-Z0-9]{5})",
+    r"activation\s*code[^A-Z0-9]*"
+    r"|код\s*активации[^A-Z0-9]*"
+    r"|confirmation\s*code[^A-Z0-9]*"
+    r"|verify.*?code[^A-Z0-9]*"
+    r"|your\s*code\s*is[^A-Z0-9]*"
+    r"|provide\s*the\s*following\s*code[^A-Z0-9]*"
+    r"|adding\s*your\s*authenticator[^A-Z0-9]*"
+    r"|complete\s*adding[^A-Z0-9]*"
+    r")(\b[A-Z0-9]{5}\b)",
     re.IGNORECASE,
 )
 
@@ -226,8 +230,9 @@ class SteamGuardLinker:
             print(f"Revocation code: {result.revocation_code}")
     """
 
-    def __init__(self, proxy: dict | None = None):
+    def __init__(self, proxy: dict | None = None, email_provider: str = "auto"):
         self._proxy = proxy
+        self._email_provider = email_provider  # "imap", "outlook_web", "auto"
 
     def _create_session(self) -> requests.Session:
         session = requests.Session()
@@ -338,7 +343,276 @@ class SteamGuardLinker:
         resp.raise_for_status()
         return resp.json().get("response", {})
 
+    def _fetch_email_code(self, email: str, email_password: str,
+                          pattern: re.Pattern, max_attempts: int = 10,
+                          wait_sec: int = 5, description: str = "code") -> str | None:
+        """Получить код из email через выбранный провайдер."""
+        provider = self._email_provider
+
+        # Auto-detect: Outlook → web, остальные → IMAP
+        if provider == "auto":
+            domain = email.split("@")[-1].lower()
+            if domain in ("outlook.com", "hotmail.com", "live.com"):
+                provider = "outlook_web"
+            else:
+                provider = "imap"
+
+        if provider == "outlook_web":
+            from app.services.outlook_web_provider import fetch_code_from_outlook_web
+            return fetch_code_from_outlook_web(
+                email, email_password, pattern,
+                max_attempts=max_attempts, wait_sec=wait_sec, description=description,
+            )
+        else:
+            return _fetch_code_from_imap(
+                email, email_password, pattern,
+                max_attempts=max_attempts, wait_sec=wait_sec, description=description,
+            )
+
     # --- Full flow ---
+
+    def _login_via_playwright(
+        self, login: str, password: str, email: str, email_password: str,
+    ) -> tuple[str, str]:
+        """
+        Логин в Steam через Playwright + получение email кода из Outlook.
+        Всё в одном браузере, две вкладки: Tab1=Steam, Tab2=Outlook.
+        Возвращает (access_token, steamid).
+        """
+        from playwright.sync_api import sync_playwright
+        from app.services.steam_browser import _ensure_proactor
+
+        _ensure_proactor()
+        pw = None
+        browser = None
+
+        try:
+            pw = sync_playwright().start()
+            browser = pw.chromium.launch(headless=False)
+            context = browser.new_context(viewport={"width": 1280, "height": 800}, locale="en-US")
+
+            # === Tab 1: Steam Login ===
+            steam_page = context.new_page()
+            steam_page.goto("https://store.steampowered.com/login", wait_until="domcontentloaded", timeout=30000)
+
+            login_form = steam_page.locator('[data-featuretarget="login"]')
+            login_form.wait_for(state="visible", timeout=15000)
+
+            login_input = login_form.locator('input[type="text"]').first
+            login_input.wait_for(state="visible", timeout=10000)
+            login_input.fill(login)
+
+            password_input = login_form.locator('input[type="password"]').first
+            password_input.fill(password)
+
+            submit_btn = login_form.locator('button[type="submit"]').first
+            submit_btn.click()
+            time.sleep(5)
+
+            logger.info("[login-pw] %s: логин отправлен, открываем Outlook...", login)
+
+            # === Tab 2: Outlook Login + читаем код ===
+            outlook_page = context.new_page()
+            outlook_page.goto("https://login.live.com/", wait_until="domcontentloaded", timeout=30000)
+            time.sleep(2)
+
+            # Email
+            email_input = outlook_page.locator('input[type="email"], input[name="loginfmt"]').first
+            if email_input.count() > 0:
+                email_input.fill(email)
+                time.sleep(1)
+                outlook_page.locator('input[type="submit"], button[type="submit"]').first.click()
+                time.sleep(3)
+
+            # Password
+            pwd_input = outlook_page.locator('input[type="password"], input[name="passwd"]').first
+            if pwd_input.count() > 0 and pwd_input.is_visible():
+                pwd_input.fill(email_password)
+                time.sleep(1)
+                outlook_page.locator('input[type="submit"], button[type="submit"]').first.click()
+                time.sleep(3)
+
+            # "Stay signed in?" — No
+            try:
+                no_btn = outlook_page.locator('#idBtn_Back, input[value="No"]').first
+                if no_btn.count() > 0 and no_btn.is_visible():
+                    no_btn.click()
+                    time.sleep(2)
+            except Exception:
+                pass
+
+            logger.info("[login-pw] %s: Outlook залогинен", login)
+
+            # Переходим в inbox (с fallback если редирект)
+            outlook_page.goto("https://outlook.live.com/mail/0/", wait_until="domcontentloaded", timeout=30000)
+            time.sleep(5)
+            # Если редирект на microsoft.com — пробуем другой URL
+            if "microsoft.com" in outlook_page.url and "outlook.live.com" not in outlook_page.url:
+                logger.info("[login-pw] %s: редирект на %s, пробуем другой URL...", login, outlook_page.url)
+                outlook_page.goto("https://outlook.office.com/mail/inbox", wait_until="domcontentloaded", timeout=30000)
+                time.sleep(5)
+            if "microsoft.com" in outlook_page.url and "outlook" not in outlook_page.url:
+                # Ещё один fallback
+                outlook_page.goto("https://outlook.live.com/", wait_until="domcontentloaded", timeout=30000)
+                time.sleep(5)
+            time.sleep(3)
+
+            # Ищем код в письмах — ждём терпеливо, обновляем редко
+            email_code = None
+            for attempt in range(1, 20):
+                logger.info("[login-pw] %s: ищем login code (попытка %d)...", login, attempt)
+
+                # Кликаем на первое письмо от Steam/Guard
+                outlook_page.evaluate("""
+                    () => {
+                        const items = document.querySelectorAll('[role="option"], [role="listitem"], [data-convid]');
+                        for (const item of items) {
+                            const text = item.textContent || '';
+                            if (text.includes('Steam') || text.includes('Guard')) {
+                                item.click(); return true;
+                            }
+                        }
+                        if (items.length > 0) items[0].click();
+                        return false;
+                    }
+                """)
+                time.sleep(5)
+
+                # Читаем весь текст страницы (включая открытое письмо)
+                body_text = outlook_page.evaluate("() => document.body.innerText || ''")
+                if body_text:
+                    # Основной паттерн
+                    match = _LOGIN_CODE_PATTERN.search(body_text)
+                    if match:
+                        email_code = match.group(1)
+                        logger.info("[login-pw] %s: код найден (pattern): %s", login, email_code)
+                        break
+
+                    # Fallback — ищем изолированный 5-символьный код [A-Z0-9]
+                    # рядом со словами Steam/Guard/code/account
+                    if "Steam" in body_text or "Guard" in body_text:
+                        fallback = re.findall(r'\b([A-Z0-9]{5})\b', body_text)
+                        # Фильтруем — код не должен быть обычным словом
+                        for candidate in fallback:
+                            # Пропускаем слова: Steam, Guard, etc
+                            if candidate in ("STEAM", "GUARD", "EMAIL", "VALVE"):
+                                continue
+                            # Код содержит и буквы и цифры обычно
+                            has_digit = any(c.isdigit() for c in candidate)
+                            has_letter = any(c.isalpha() for c in candidate)
+                            if has_digit and has_letter:
+                                email_code = candidate
+                                logger.info("[login-pw] %s: код найден (fallback): %s", login, email_code)
+                                break
+                        if email_code:
+                            break
+
+                # Обновляем inbox каждые 3 попытки (не каждую)
+                if attempt % 3 == 0:
+                    outlook_page.goto("https://outlook.live.com/mail/0/", wait_until="domcontentloaded", timeout=20000)
+                    time.sleep(8)
+                else:
+                    time.sleep(5)
+
+            if not email_code:
+                raise RuntimeError("Email код для входа не найден")
+
+            # === Переключаемся на Tab 1 (Steam) и вводим код ===
+            steam_page.bring_to_front()
+            time.sleep(1)
+
+            char_inputs = steam_page.locator('input[maxlength="1"][type="text"]')
+            count = char_inputs.count()
+            if count >= 5:
+                for i in range(min(len(email_code), count)):
+                    char_inputs.nth(i).click()
+                    char_inputs.nth(i).fill(email_code[i])
+                    time.sleep(0.1)
+                time.sleep(5)
+
+            steam_page.wait_for_load_state("networkidle", timeout=15000)
+            logger.info("[login-pw] %s: залогинен в Steam, URL=%s", login, steam_page.url)
+
+            # Извлекаем access_token из cookies
+            cookies = context.cookies("https://store.steampowered.com")
+            access_token = ""
+            steamid = ""
+
+            for cookie in cookies:
+                if cookie["name"] == "steamLoginSecure":
+                    value = cookie["value"]
+                    parts = value.split("%7C%7C")
+                    if len(parts) == 2:
+                        steamid = parts[0]
+                        access_token = parts[1]
+                    break
+
+            if not access_token:
+                raise RuntimeError("access_token не найден в cookies")
+
+            logger.info("[login-pw] %s: token получен, steamid=%s", login, steamid)
+            # НЕ закрываем браузер — возвращаем всё для переиспользования
+            return access_token, steamid, outlook_page, pw, browser
+
+        except Exception:
+            # При ошибке — закрываем
+            if browser:
+                try: browser.close()
+                except Exception: pass
+            if pw:
+                try: pw.stop()
+                except Exception: pass
+            raise
+
+    def _read_code_from_outlook_page(self, outlook_page, pattern, login, description="code", max_attempts=15):
+        """Читает код из уже открытой вкладки Outlook."""
+        for attempt in range(1, max_attempts + 1):
+            logger.info("[outlook] %s: ищем %s (попытка %d)...", login, description, attempt)
+
+            # Кликаем на письмо от Steam
+            outlook_page.evaluate("""
+                () => {
+                    const items = document.querySelectorAll('[role="option"], [role="listitem"], [data-convid]');
+                    for (const item of items) {
+                        const text = item.textContent || '';
+                        if (text.includes('Steam') || text.includes('Guard') || text.includes('authenticator')) {
+                            item.click(); return true;
+                        }
+                    }
+                    if (items.length > 0) items[0].click();
+                    return false;
+                }
+            """)
+            time.sleep(5)
+
+            body_text = outlook_page.evaluate("() => document.body.innerText || ''")
+            if body_text:
+                match = pattern.search(body_text)
+                if match:
+                    code = match.group(1)
+                    logger.info("[outlook] %s: %s найден: %s", login, description, code)
+                    return code
+
+                # Fallback — изолированный 5-символьный код рядом со Steam
+                if "Steam" in body_text or "authenticator" in body_text.lower():
+                    fallback = re.findall(r'\b([A-Z0-9]{5})\b', body_text)
+                    for candidate in fallback:
+                        if candidate in ("STEAM", "GUARD", "EMAIL", "VALVE"):
+                            continue
+                        has_digit = any(c.isdigit() for c in candidate)
+                        has_letter = any(c.isalpha() for c in candidate)
+                        if has_digit and has_letter:
+                            logger.info("[outlook] %s: %s найден (fallback): %s", login, description, candidate)
+                            return candidate
+
+            # Обновляем inbox каждые 3 попытки
+            if attempt % 3 == 0:
+                outlook_page.goto("https://outlook.live.com/mail/0/", wait_until="domcontentloaded", timeout=20000)
+                time.sleep(8)
+            else:
+                time.sleep(5)
+
+        return None
 
     def _link_sync(
         self,
@@ -347,63 +621,25 @@ class SteamGuardLinker:
         email: str,
         email_password: str,
     ) -> LinkResult:
-        """Полный синхронный flow привязки Guard."""
+        """Полный синхронный flow привязки Guard. Один браузер на весь процесс."""
         result = LinkResult()
         session = self._create_session()
 
+        pw_instance = None
+        browser_instance = None
+
         try:
-            # === Step 1: Login ===
+            # === Step 1: Login via Playwright ===
             step_login = LinkStep(name="login", status="running")
             result.steps.append(step_login)
 
-            # 1a. RSA key
-            rsa_data = self._get_rsa_key(session, login)
-            encrypted_pw = _encrypt_password_rsa(
-                password,
-                rsa_data["publickey_mod"],
-                rsa_data["publickey_exp"],
-            )
-
-            # 1b. Begin auth
-            auth = self._begin_auth_session(
-                session, login, encrypted_pw, rsa_data["timestamp"],
-            )
-            client_id = str(auth["client_id"])
-            request_id = str(auth["request_id"])
-            steamid = str(auth.get("steamid", ""))
-
-            # 1c. Email Guard (если нужен)
-            confirmations = auth.get("allowed_confirmations", [])
-            needs_email = any(c.get("confirmation_type") == 2 for c in confirmations)
-
-            if needs_email:
-                logger.info("[login] Требуется email код для входа...")
-                login_code = _fetch_code_from_imap(
-                    email, email_password, _LOGIN_CODE_PATTERN,
-                    max_attempts=8, wait_sec=5, description="login code",
-                )
-                if not login_code:
-                    step_login.status = "error"
-                    step_login.detail = "Email код для входа не найден"
-                    result.error = step_login.detail
-                    return result
-
-                self._submit_steam_guard_code(session, client_id, steamid, login_code)
-                logger.info("[login] Email код отправлен")
-
-            # 1d. Poll для получения токенов
-            access_token = ""
-            for _ in range(15):
-                time.sleep(2)
-                poll = self._poll_auth_status(session, client_id, request_id)
-                access_token = poll.get("access_token", "")
-                if access_token:
-                    break
-
-            if not access_token:
+            try:
+                access_token, steamid, outlook_page, pw_instance, browser_instance = \
+                    self._login_via_playwright(login, password, email, email_password)
+            except Exception as e:
                 step_login.status = "error"
-                step_login.detail = "Не удалось получить access_token"
-                result.error = step_login.detail
+                step_login.detail = str(e)[:200]
+                result.error = str(e)[:200]
                 return result
 
             step_login.status = "done"
@@ -419,7 +655,7 @@ class SteamGuardLinker:
 
             if status_code == 29:
                 step_add.status = "error"
-                step_add.detail = "status=29 (требуется телефон — не должно быть)"
+                step_add.detail = "status=29 (требуется телефон)"
                 result.error = "Steam требует привязку телефона (status=29)"
                 return result
             elif status_code == 2:
@@ -435,10 +671,9 @@ class SteamGuardLinker:
             elif status_code != 1:
                 step_add.status = "error"
                 step_add.detail = f"status={status_code}"
-                result.error = f"AddAuthenticator неожиданный status={status_code}"
+                result.error = f"AddAuthenticator status={status_code}"
                 return result
 
-            # Собираем maFile
             mafile = MaFileData(
                 shared_secret=auth_resp.get("shared_secret", ""),
                 serial_number=str(auth_resp.get("serial_number", "")),
@@ -455,20 +690,21 @@ class SteamGuardLinker:
 
             step_add.status = "done"
             step_add.detail = f"revocation_code={mafile.revocation_code}"
-            logger.info(
-                "[add_auth] Authenticator добавлен. Revocation: %s",
-                mafile.revocation_code,
-            )
+            logger.info("[add_auth] Authenticator добавлен. Revocation: %s", mafile.revocation_code)
 
-            # === Step 3: Finalize (email подтверждение) ===
+            # === Step 3: Finalize — читаем activation code из уже открытого Outlook ===
             step_final = LinkStep(name="finalize", status="running")
             result.steps.append(step_final)
 
-            # Ждём email с кодом активации
             time.sleep(3)
-            activation_code = _fetch_code_from_imap(
-                email, email_password, _ACTIVATION_CODE_PATTERN,
-                max_attempts=12, wait_sec=5, description="activation code",
+
+            # Обновляем inbox в уже открытой вкладке
+            outlook_page.goto("https://outlook.live.com/mail/0/", wait_until="domcontentloaded", timeout=20000)
+            time.sleep(8)
+
+            activation_code = self._read_code_from_outlook_page(
+                outlook_page, _ACTIVATION_CODE_PATTERN, login,
+                description="activation code", max_attempts=15,
             )
             if not activation_code:
                 step_final.status = "error"
@@ -517,6 +753,15 @@ class SteamGuardLinker:
                 result.steps[-1].detail = str(e)
             result.error = str(e)
             logger.error("[link] Ошибка для %s: %s", login, e, exc_info=True)
+
+        finally:
+            # Закрываем браузер в самом конце
+            if browser_instance:
+                try: browser_instance.close()
+                except Exception: pass
+            if pw_instance:
+                try: pw_instance.stop()
+                except Exception: pass
 
         return result
 

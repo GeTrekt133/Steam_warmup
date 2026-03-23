@@ -8,6 +8,8 @@ GET  /warmup/quests      — список доступных квестов
 """
 
 import asyncio
+import logging
+import random
 import threading
 import uuid
 from typing import Any
@@ -29,6 +31,8 @@ from app.services.steam_browser import _ensure_proactor
 from app.services import text_generator
 from app.services.session_persistence import save_warmup_session
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
 
 # ─── In-memory задачи прогрева ────────────────────────────────
@@ -49,6 +53,7 @@ class WarmupStartRequest(BaseModel):
     max_accounts_per_minute: int = 3  # rate limiting: макс. аккаунтов в минуту
     warmup_timeout: int = 600         # общий timeout на аккаунт в секундах (default: 10 мин)
     max_quest_retries: int = 3        # кол-во retry при ошибке квеста
+    friend_requests_count: int = 3    # количество заявок в друзья (1-10)
 
 
 class WarmupStopRequest(BaseModel):
@@ -168,6 +173,7 @@ async def _run_warmup(
                 rate_limiter=rate_limiter,
                 warmup_timeout=req.warmup_timeout,
                 max_quest_retries=req.max_quest_retries,
+                friend_requests_count=req.friend_requests_count,
             )
 
             # Запускаем sync Playwright в отдельном потоке
@@ -192,6 +198,12 @@ async def _run_warmup(
                 status.error = str(e)[:300]
 
             task["completed"] += 1
+
+            # Антибан: задержка между аккаунтами (1–5 мин), не блокирует статус
+            if task["completed"] < task["total"] and not task["stop_flag"]:
+                post_delay = random.uniform(60, 300)
+                logger.info(f"[Warmup] {login}: пауза {post_delay / 60:.1f} мин перед следующим аккаунтом")
+                await asyncio.sleep(post_delay)
 
             # Сохраняем финальный статус в БД
             try:

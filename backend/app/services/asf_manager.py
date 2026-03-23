@@ -12,9 +12,11 @@ import asyncio
 import io
 import json
 import logging
+import os
 import subprocess
 import sys
 import zipfile
+from datetime import datetime
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -24,6 +26,115 @@ from app.config import settings
 from app.services.encryption import decrypt
 
 logger = logging.getLogger(__name__)
+
+# ─── ASF Health Check лог ─────────────────────────────────────────
+_HEALTH_LOG_DIR = Path(os.path.expanduser("~/Steam_warmup_logs"))
+_HEALTH_LOG_DIR.mkdir(exist_ok=True)
+
+_health_logger = logging.getLogger("asf_health")
+_health_handler = logging.FileHandler(
+    _HEALTH_LOG_DIR / "asf_health.log", encoding="utf-8",
+)
+_health_handler.setFormatter(
+    logging.Formatter("%(asctime)s | %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+)
+_health_logger.addHandler(_health_handler)
+_health_logger.setLevel(logging.INFO)
+
+_health_check_task: asyncio.Task | None = None
+
+
+async def _asf_health_check_loop():
+    """Фоновый health check ASF раз в минуту. Пишет в asf_health.log."""
+    while True:
+        try:
+            await asyncio.sleep(60)
+
+            process_alive = is_running()
+            pid = get_pid()
+
+            # Проверяем IPC
+            ipc_ok = False
+            ipc_detail = ""
+            try:
+                async with httpx.AsyncClient() as client:
+                    headers = {}
+                    if settings.ASF_IPC_PASSWORD:
+                        headers["Authentication"] = settings.ASF_IPC_PASSWORD
+                    r = await client.get(
+                        f"{settings.ASF_IPC_URL}/Api/ASF",
+                        headers=headers,
+                        timeout=5.0,
+                    )
+                    if r.status_code == 200:
+                        data = r.json().get("Result", {})
+                        mem = data.get("MemoryUsage", 0)
+                        uptime = data.get("ProcessStartTime", "")
+                        ipc_ok = True
+                        ipc_detail = f"mem={mem}MB, start={uptime}"
+            except Exception as e:
+                ipc_detail = str(e)[:100]
+
+            # Проверяем ботов
+            bots_detail = ""
+            if ipc_ok:
+                try:
+                    async with httpx.AsyncClient() as client:
+                        headers = {}
+                        if settings.ASF_IPC_PASSWORD:
+                            headers["Authentication"] = settings.ASF_IPC_PASSWORD
+                        r = await client.get(
+                            f"{settings.ASF_IPC_URL}/Api/Bot/ASF",
+                            headers=headers,
+                            timeout=5.0,
+                        )
+                        if r.status_code == 200:
+                            bots = r.json().get("Result", {})
+                            online = sum(1 for b in bots.values() if b.get("IsConnectedAndLoggedOn"))
+                            total = len(bots)
+                            bots_detail = f"bots={online}/{total} online"
+                except Exception:
+                    pass
+
+            status = "OK" if process_alive and ipc_ok else "FAIL"
+            _health_logger.info(
+                f"[{status}] process={'ALIVE' if process_alive else 'DEAD'} "
+                f"pid={pid} ipc={'OK' if ipc_ok else 'FAIL'} "
+                f"{ipc_detail} {bots_detail}"
+            )
+
+            # Если процесс упал — авторестарт
+            if not process_alive and _asf_process is not None:
+                rc = _asf_process.returncode if _asf_process else "?"
+                _health_logger.warning(
+                    f"[CRASH] ASF процесс завершился! returncode={rc}, перезапускаю..."
+                )
+                ok, msg = await start_asf()
+                if ok:
+                    _health_logger.info(f"[RESTART] ASF успешно перезапущен: {msg}")
+                else:
+                    _health_logger.error(f"[RESTART] Не удалось перезапустить ASF: {msg}")
+
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            _health_logger.error(f"[ERROR] health check exception: {e}")
+
+
+def start_health_check():
+    """Запускает фоновый health check (вызывать при startup)."""
+    global _health_check_task
+    if _health_check_task is None or _health_check_task.done():
+        _health_check_task = asyncio.create_task(_asf_health_check_loop())
+        _health_logger.info("[START] ASF health check запущен (интервал: 60 сек)")
+
+
+def stop_health_check():
+    """Останавливает health check."""
+    global _health_check_task
+    if _health_check_task and not _health_check_task.done():
+        _health_check_task.cancel()
+        _health_logger.info("[STOP] ASF health check остановлен")
 
 # Глобальный процесс ASF (singleton в рамках backend-процесса)
 _asf_process: Optional[subprocess.Popen] = None

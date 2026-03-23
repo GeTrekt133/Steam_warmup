@@ -13,15 +13,31 @@ Smart Farming — интеллектуальный фарм часов с рас
 
 import asyncio
 import logging
+import os
 import random
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 from app.services import asf_ipc
 
 logger = logging.getLogger(__name__)
+
+# ─── Файловый лог фарма ──────────────────────────────────────────
+_LOG_DIR = Path(os.path.expanduser("~/Steam_warmup_logs"))
+_LOG_DIR.mkdir(exist_ok=True)
+
+_farm_file_handler = logging.FileHandler(
+    _LOG_DIR / "smart_farming.log", encoding="utf-8",
+)
+_farm_file_handler.setFormatter(
+    logging.Formatter("%(asctime)s | %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+)
+_farm_file_handler.setLevel(logging.INFO)
+logger.addHandler(_farm_file_handler)
+logger.setLevel(logging.DEBUG)
 
 
 # ─── Пул F2P игр (копия из asf.py для ротации) ─────────────────
@@ -32,6 +48,28 @@ FREE_GAMES_POOL = [
     1097150, 2399830, 2767030, 1963000, 3221870, 945360,
 ]
 
+# Имена игр для читаемых логов
+GAME_NAMES: dict[int, str] = {
+    730: "CS2", 570: "Dota 2", 440: "TF2", 578080: "PUBG",
+    1172470: "Apex Legends", 230410: "Warframe", 304930: "Unturned",
+    444090: "Paladins", 386360: "SMITE", 236390: "War Thunder",
+    1085660: "Destiny 2", 238960: "Path of Exile", 1599340: "Lost Ark",
+    1366540: "Enlisted", 1097150: "Fall Guys", 2399830: "Overwatch 2",
+    2767030: "Marvel Rivals", 1963000: "The Finals", 3221870: "Delta Force",
+    945360: "Among Us",
+}
+
+
+def _game_str(app_id: int) -> str:
+    """Человекочитаемое название игры для логов."""
+    name = GAME_NAMES.get(app_id)
+    return f"{name} ({app_id})" if name else str(app_id)
+
+
+def _games_str(app_ids: list[int]) -> str:
+    """Список игр для логов."""
+    return ", ".join(_game_str(a) for a in app_ids)
+
 
 # ─── Конфигурация Smart Farming ─────────────────────────────────
 
@@ -41,6 +79,7 @@ class SmartFarmingConfig:
     """Конфигурация Smart Farming для одного бота/группы."""
     bot_names: list[str]
     app_ids: list[int] = field(default_factory=list)
+    game_weights: dict[int, int] = field(default_factory=dict)  # {730: 60, 570: 20} — веса для ротации
 
     # Окно активности (часы, 0–23)
     active_start_hour: int = 8       # начало активности
@@ -58,7 +97,7 @@ class SmartFarmingConfig:
 
     # Ротация игр
     game_rotation_hours: float = 3.0   # менять игры каждые N часов
-    games_per_rotation: int = 3        # сколько игр на ротацию
+    games_per_rotation: int = 1        # сколько игр на ротацию
     use_random_games: bool = True      # использовать случайные игры из пула
 
     # Имитация паттернов
@@ -68,6 +107,7 @@ class SmartFarmingConfig:
         return {
             "bot_names": self.bot_names,
             "app_ids": self.app_ids,
+            "game_weights": {str(k): v for k, v in self.game_weights.items()},
             "active_start_hour": self.active_start_hour,
             "active_end_hour": self.active_end_hour,
             "start_jitter_minutes": self.start_jitter_minutes,
@@ -177,12 +217,47 @@ def _schedule_next_rotation(session: SmartFarmingSession) -> float:
 
 
 def _pick_random_games(config: SmartFarmingConfig, exclude: list[int] | None = None) -> list[int]:
-    """Выбирает случайный набор игр для ротации."""
+    """Выбирает случайный набор игр для ротации.
+
+    Если задан game_weights — используем взвешенный выбор.
+    Игра с весом 60 попадает в ротацию в 3 раза чаще чем с весом 20.
+    """
+    # --- Взвешенный режим (профиль игрока) ---
+    if config.game_weights:
+        pool_ids = list(config.game_weights.keys())
+        weights = [config.game_weights[g] for g in pool_ids]
+
+        # Исключаем текущие (чтобы ротация была заметна)
+        if exclude:
+            filtered = [(g, w) for g, w in zip(pool_ids, weights) if g not in exclude]
+            if filtered:
+                pool_ids, weights = zip(*filtered)
+                pool_ids = list(pool_ids)
+                weights = list(weights)
+            # Если после исключения пусто — берём всё
+            else:
+                pool_ids = list(config.game_weights.keys())
+                weights = [config.game_weights[g] for g in pool_ids]
+
+        count = min(config.games_per_rotation, len(pool_ids))
+        # Без повторов: выбираем по одной с весами
+        selected: list[int] = []
+        remaining_ids = list(pool_ids)
+        remaining_weights = list(weights)
+        for _ in range(count):
+            if not remaining_ids:
+                break
+            chosen = random.choices(remaining_ids, weights=remaining_weights, k=1)[0]
+            selected.append(chosen)
+            idx = remaining_ids.index(chosen)
+            remaining_ids.pop(idx)
+            remaining_weights.pop(idx)
+        return selected
+
+    # --- Обычный режим (равные шансы) ---
     pool = list(FREE_GAMES_POOL)
-    # Добавляем пользовательские игры в пул
     if config.app_ids:
         pool = list(set(pool + config.app_ids))
-    # Исключаем текущие (чтобы ротация была заметна)
     if exclude:
         pool = [g for g in pool if g not in exclude]
     if not pool:
@@ -195,26 +270,39 @@ async def _start_playing(session: SmartFarmingSession):
     """Запускает фарм для всех ботов сессии."""
     config = session.config
     for bot_name in config.bot_names:
-        if config.use_random_games:
+        if config.game_weights:
+            apps = _pick_random_games(config)
+        elif config.use_random_games:
             apps = _pick_random_games(config)
         elif config.app_ids:
-            apps = config.app_ids[:5]  # ASF лимит 32 игры, но 5 оптимально
+            apps = config.app_ids[:5]
         else:
             apps = _pick_random_games(config)
+
+        # Добавляем игры в библиотеку (если F2P и нет в аккаунте — ASF добавит)
+        add_result = await asf_ipc.add_license(bot_name, apps)
+        logger.info(
+            f"[SmartFarm] {session.session_id} | {bot_name} | "
+            f"addlicense [{_games_str(apps)}] → {add_result}"
+        )
 
         session.current_apps[bot_name] = apps
         result = await asf_ipc.play_games(bot_name, apps)
         logger.info(
-            f"[SmartFarm] {session.session_id}: {bot_name} играет в {apps}, "
-            f"ASF ответ: {result}"
+            f"[SmartFarm] {session.session_id} | {bot_name} | "
+            f"▶ PLAY [{_games_str(apps)}] → {result}"
         )
 
 
 async def _stop_playing(session: SmartFarmingSession):
     """Останавливает фарм для всех ботов сессии."""
     for bot_name in session.config.bot_names:
+        old_apps = session.current_apps.get(bot_name, [])
         result = await asf_ipc.stop_playing(bot_name)
-        logger.info(f"[SmartFarm] {session.session_id}: {bot_name} остановлен, ASF: {result}")
+        logger.info(
+            f"[SmartFarm] {session.session_id} | {bot_name} | "
+            f"■ STOP (было: [{_games_str(old_apps)}]) → {result}"
+        )
     session.current_apps.clear()
 
 
@@ -228,21 +316,24 @@ async def _rotate_games(session: SmartFarmingSession):
         if config.simulate_game_switching:
             # Имитация: сначала "выходим" из одной игры
             if old_apps and len(old_apps) > 1:
-                # Убираем одну случайную игру
                 removed = random.choice(old_apps)
                 temp_apps = [a for a in old_apps if a != removed]
                 await asf_ipc.play_games(bot_name, temp_apps)
                 logger.info(
-                    f"[SmartFarm] {session.session_id}: {bot_name} вышел из {removed}"
+                    f"[SmartFarm] {session.session_id} | {bot_name} | "
+                    f"↩ вышел из {_game_str(removed)}, осталось [{_games_str(temp_apps)}]"
                 )
                 await asyncio.sleep(random.uniform(2, 8))
+
+        # Добавляем новые игры в библиотеку перед запуском
+        await asf_ipc.add_license(bot_name, new_apps)
 
         # Переключаемся на новые игры
         session.current_apps[bot_name] = new_apps
         await asf_ipc.play_games(bot_name, new_apps)
         logger.info(
-            f"[SmartFarm] {session.session_id}: {bot_name} ротация игр "
-            f"{old_apps} → {new_apps}"
+            f"[SmartFarm] {session.session_id} | {bot_name} | "
+            f"🔄 РОТАЦИЯ [{_games_str(old_apps)}] → [{_games_str(new_apps)}]"
         )
 
     session.rotations_done += 1
@@ -260,7 +351,8 @@ async def _take_break(session: SmartFarmingSession):
     duration_seconds = duration_minutes * 60
 
     logger.info(
-        f"[SmartFarm] {session.session_id}: перерыв на {duration_minutes} мин"
+        f"[SmartFarm] {session.session_id} | "
+        f"☕ ПЕРЕРЫВ {duration_minutes} мин (нафармлено {session.total_hours_farmed:.1f}ч)"
     )
 
     session.status = "break"
@@ -277,7 +369,10 @@ async def _take_break(session: SmartFarmingSession):
     if session.status == "break":  # мог быть остановлен пользователем
         session.status = "active"
         await _start_playing(session)
-        logger.info(f"[SmartFarm] {session.session_id}: перерыв закончен, фарм возобновлён")
+        logger.info(
+            f"[SmartFarm] {session.session_id} | "
+            f"☕→▶ ПЕРЕРЫВ ЗАКОНЧЕН, фарм возобновлён (перерывов: {session.breaks_taken})"
+        )
 
 
 async def _smart_farming_loop(session: SmartFarmingSession):
@@ -293,11 +388,30 @@ async def _smart_farming_loop(session: SmartFarmingSession):
     session.started_at = time.time()
     session.status = "active"
 
+    # Логируем конфигурацию при старте
+    if config.game_weights:
+        weights_str = ", ".join(f"{_game_str(k)}={v}" for k, v in config.game_weights.items())
+        logger.info(
+            f"[SmartFarm] {session.session_id} | КОНФИГ: "
+            f"боты={config.bot_names}, профиль=[{weights_str}], "
+            f"окно={config.active_start_hour}:00–{config.active_end_hour}:00, "
+            f"перерывы={config.break_interval_hours_min}-{config.break_interval_hours_max}ч, "
+            f"ротация каждые {config.game_rotation_hours}ч по {config.games_per_rotation} игр"
+        )
+    else:
+        logger.info(
+            f"[SmartFarm] {session.session_id} | КОНФИГ: "
+            f"боты={config.bot_names}, профиль=РАНДОМ ИЗ ПУЛА, "
+            f"окно={config.active_start_hour}:00–{config.active_end_hour}:00, "
+            f"перерывы={config.break_interval_hours_min}-{config.break_interval_hours_max}ч, "
+            f"ротация каждые {config.game_rotation_hours}ч по {config.games_per_rotation} игр"
+        )
+
     # Рандомизация времени старта
     if config.start_jitter_minutes > 0:
         jitter = random.uniform(0, config.start_jitter_minutes * 60)
         logger.info(
-            f"[SmartFarm] {session.session_id}: ожидание jitter {jitter / 60:.1f} мин"
+            f"[SmartFarm] {session.session_id} | ⏳ jitter {jitter / 60:.1f} мин перед стартом"
         )
         await asyncio.sleep(jitter)
 
@@ -305,7 +419,7 @@ async def _smart_farming_loop(session: SmartFarmingSession):
     if not _is_in_active_window(config):
         session.status = "paused"
         logger.info(
-            f"[SmartFarm] {session.session_id}: вне окна активности "
+            f"[SmartFarm] {session.session_id} | ⏸ вне окна активности "
             f"({config.active_start_hour}:00–{config.active_end_hour}:00), ожидание"
         )
         while not _is_in_active_window(config) and session.status != "stopped":
@@ -334,14 +448,17 @@ async def _smart_farming_loop(session: SmartFarmingSession):
             if not _is_in_active_window(config):
                 if session.status == "active":
                     logger.info(
-                        f"[SmartFarm] {session.session_id}: окно активности закончилось, пауза"
+                        f"[SmartFarm] {session.session_id} | "
+                        f"⏸ ОКНО ЗАКРЫЛОСЬ ({config.active_end_hour}:00), пауза "
+                        f"(нафармлено {session.total_hours_farmed:.1f}ч)"
                     )
                     session.status = "paused"
                     await _stop_playing(session)
                 continue
             elif session.status == "paused":
                 logger.info(
-                    f"[SmartFarm] {session.session_id}: окно активности началось, возобновление"
+                    f"[SmartFarm] {session.session_id} | "
+                    f"▶ ОКНО ОТКРЫЛОСЬ ({config.active_start_hour}:00), возобновление"
                 )
                 session.status = "active"
                 await _start_playing(session)

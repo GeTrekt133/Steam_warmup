@@ -112,6 +112,7 @@ class FarmStopRequest(BaseModel):
 class SmartFarmStartRequest(BaseModel):
     bot_names: list[str]
     app_ids: list[int] = []
+    game_weights_pool: list[dict[str, int]] | None = None  # массив профилей, каждому боту — рандомный
     active_start_hour: int = 8
     active_end_hour: int = 23
     start_jitter_minutes: int = 30
@@ -121,7 +122,7 @@ class SmartFarmStartRequest(BaseModel):
     break_duration_minutes_min: int = 15
     break_duration_minutes_max: int = 45
     game_rotation_hours: float = 3.0
-    games_per_rotation: int = 3
+    games_per_rotation: int = 1
     use_random_games: bool = True
     simulate_game_switching: bool = True
 
@@ -713,29 +714,48 @@ async def farm_smart_start(
     if not req.bot_names:
         raise HTTPException(status_code=400, detail="Список ботов пуст")
 
-    config = SmartFarmingConfig(
-        bot_names=req.bot_names,
-        app_ids=req.app_ids,
-        active_start_hour=req.active_start_hour,
-        active_end_hour=req.active_end_hour,
-        start_jitter_minutes=req.start_jitter_minutes,
-        stop_jitter_minutes=req.stop_jitter_minutes,
-        break_interval_hours_min=req.break_interval_hours_min,
-        break_interval_hours_max=req.break_interval_hours_max,
-        break_duration_minutes_min=req.break_duration_minutes_min,
-        break_duration_minutes_max=req.break_duration_minutes_max,
-        game_rotation_hours=req.game_rotation_hours,
-        games_per_rotation=req.games_per_rotation,
-        use_random_games=req.use_random_games,
-        simulate_game_switching=req.simulate_game_switching,
-    )
+    # Конвертируем пул профилей: [{"730": 60}, {"570": 50}] → [{730: 60}, {570: 50}]
+    weights_pool: list[dict[int, int]] = []
+    if req.game_weights_pool:
+        for wp in req.game_weights_pool:
+            weights_pool.append({int(k): v for k, v in wp.items()})
 
-    session = await start_smart_farming(config, owner_id=current_user.id)
-    return {
-        "session_id": session.session_id,
-        "status": session.status,
-        "config": config.to_dict(),
-    }
+    import random as _random
+
+    # Для каждого бота — рандомный профиль из пула (или без профиля)
+    results = []
+    for bot_name in req.bot_names:
+        bot_weights: dict[int, int] = {}
+        if weights_pool:
+            bot_weights = _random.choice(weights_pool)
+
+        config = SmartFarmingConfig(
+            bot_names=[bot_name],
+            app_ids=req.app_ids,
+            game_weights=bot_weights,
+            active_start_hour=req.active_start_hour,
+            active_end_hour=req.active_end_hour,
+            start_jitter_minutes=req.start_jitter_minutes,
+            stop_jitter_minutes=req.stop_jitter_minutes,
+            break_interval_hours_min=req.break_interval_hours_min,
+            break_interval_hours_max=req.break_interval_hours_max,
+            break_duration_minutes_min=req.break_duration_minutes_min,
+            break_duration_minutes_max=req.break_duration_minutes_max,
+            game_rotation_hours=req.game_rotation_hours,
+            games_per_rotation=req.games_per_rotation,
+            use_random_games=req.use_random_games and not bot_weights,
+            simulate_game_switching=req.simulate_game_switching,
+        )
+
+        session = await start_smart_farming(config, owner_id=current_user.id)
+        results.append({
+            "session_id": session.session_id,
+            "bot_name": bot_name,
+            "status": session.status,
+            "profile_games": list(bot_weights.keys()) if bot_weights else "random_pool",
+        })
+
+    return {"sessions": results}
 
 
 @router.post("/farm/smart-stop")

@@ -14,6 +14,10 @@ import {
   Coffee,
   Shuffle,
   Zap,
+  UserCircle,
+  Pencil,
+  Trash2,
+  X,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -31,6 +35,96 @@ const PRESET_GAMES = [
   { appId: 238960,  name: 'Path of Exile' },
   { appId: 1085660, name: 'Destiny 2' },
 ]
+
+// Расширенный список для профилей (включая платные популярные)
+const ALL_GAMES = [
+  ...PRESET_GAMES,
+  { appId: 304930,  name: 'Unturned' },
+  { appId: 444090,  name: 'Paladins' },
+  { appId: 386360,  name: 'SMITE' },
+  { appId: 236390,  name: 'War Thunder' },
+  { appId: 1599340, name: 'Lost Ark' },
+  { appId: 1366540, name: 'Enlisted' },
+  { appId: 1097150, name: 'Fall Guys' },
+  { appId: 2399830, name: 'Overwatch 2' },
+  { appId: 3221870, name: 'Delta Force' },
+  { appId: 945360,  name: 'Among Us' },
+]
+
+const GAME_NAME_MAP: Record<number, string> = {}
+for (const g of ALL_GAMES) GAME_NAME_MAP[g.appId] = g.name
+
+// ─── Профили игроков ─────────────────────────────────────────
+
+interface GameWeight {
+  appId: number
+  weight: number  // 1-100, не обязательно в сумме 100 (нормализуем при отправке)
+}
+
+interface GameProfile {
+  id: string
+  name: string
+  games: GameWeight[]
+}
+
+const DEFAULT_PROFILES: GameProfile[] = [
+  {
+    id: 'preset_cs2',
+    name: 'CS2 Игрок',
+    games: [
+      { appId: 730, weight: 60 },
+      { appId: 570, weight: 15 },
+      { appId: 440, weight: 10 },
+      { appId: 578080, weight: 10 },
+      { appId: 1172470, weight: 5 },
+    ],
+  },
+  {
+    id: 'preset_dota',
+    name: 'Дотер',
+    games: [
+      { appId: 570, weight: 55 },
+      { appId: 730, weight: 20 },
+      { appId: 2767030, weight: 15 },
+      { appId: 440, weight: 10 },
+    ],
+  },
+  {
+    id: 'preset_warthunder',
+    name: 'War Thunder',
+    games: [
+      { appId: 236390, weight: 50 },
+      { appId: 730, weight: 20 },
+      { appId: 1366540, weight: 15 },
+      { appId: 440, weight: 10 },
+      { appId: 578080, weight: 5 },
+    ],
+  },
+  {
+    id: 'preset_universal',
+    name: 'Универсальный',
+    games: [
+      { appId: 730, weight: 20 },
+      { appId: 570, weight: 20 },
+      { appId: 440, weight: 15 },
+      { appId: 230410, weight: 15 },
+      { appId: 1085660, weight: 15 },
+      { appId: 1963000, weight: 15 },
+    ],
+  },
+]
+
+function loadProfiles(): GameProfile[] {
+  try {
+    const raw = localStorage.getItem('farming_profiles')
+    if (raw) return JSON.parse(raw)
+  } catch { /* ignore */ }
+  return [...DEFAULT_PROFILES]
+}
+
+function saveProfiles(profiles: GameProfile[]) {
+  localStorage.setItem('farming_profiles', JSON.stringify(profiles))
+}
 
 // ─── Типы ─────────────────────────────────────────────────────
 
@@ -109,9 +203,81 @@ export function FarmingPage() {
   const [breakDurationMin, setBreakDurationMin] = useState(15)
   const [breakDurationMax, setBreakDurationMax] = useState(45)
   const [gameRotationHours, setGameRotationHours] = useState(3)
-  const [gamesPerRotation, setGamesPerRotation] = useState(3)
+  const [gamesPerRotation, setGamesPerRotation] = useState(1)
   const [startJitter, setStartJitter] = useState(30)
   const [simulateSwitching, setSimulateSwitching] = useState(true)
+
+  // Профили игроков
+  const [profiles, setProfiles] = useState<GameProfile[]>(() => loadProfiles())
+  const [selectedProfileIds, setSelectedProfileIds] = useState<Set<string>>(new Set())
+  const [showProfileModal, setShowProfileModal] = useState(false)
+  const [editingProfile, setEditingProfile] = useState<GameProfile | null>(null)
+
+  // Состояние модалки редактирования профиля
+  const [profileName, setProfileName] = useState('')
+  const [profileGames, setProfileGames] = useState<GameWeight[]>([])
+  const [addGameId, setAddGameId] = useState<string>('')
+
+  function openCreateProfile() {
+    setEditingProfile(null)
+    setProfileName('')
+    setProfileGames([{ appId: 730, weight: 50 }])
+    setAddGameId('')
+    setShowProfileModal(true)
+  }
+
+  function openEditProfile(profile: GameProfile) {
+    setEditingProfile(profile)
+    setProfileName(profile.name)
+    setProfileGames([...profile.games])
+    setAddGameId('')
+    setShowProfileModal(true)
+  }
+
+  function handleSaveProfile() {
+    if (!profileName.trim()) return
+    const filtered = profileGames.filter(g => g.weight > 0)
+    if (filtered.length === 0) return
+
+    const updated = [...profiles]
+    if (editingProfile) {
+      const idx = updated.findIndex(p => p.id === editingProfile.id)
+      if (idx >= 0) {
+        updated[idx] = { ...updated[idx], name: profileName.trim(), games: filtered }
+      }
+    } else {
+      updated.push({
+        id: `profile_${Date.now()}`,
+        name: profileName.trim(),
+        games: filtered,
+      })
+    }
+    setProfiles(updated)
+    saveProfiles(updated)
+    setShowProfileModal(false)
+  }
+
+  function handleDeleteProfile(id: string) {
+    const updated = profiles.filter(p => p.id !== id)
+    setProfiles(updated)
+    saveProfiles(updated)
+    setSelectedProfileIds(prev => { const next = new Set(prev); next.delete(id); return next })
+  }
+
+  function handleAddGameToProfile() {
+    const appId = parseInt(addGameId)
+    if (!appId || profileGames.some(g => g.appId === appId)) return
+    setProfileGames([...profileGames, { appId, weight: 10 }])
+    setAddGameId('')
+  }
+
+  function handleRemoveGameFromProfile(appId: number) {
+    setProfileGames(profileGames.filter(g => g.appId !== appId))
+  }
+
+  function handleGameWeightChange(appId: number, weight: number) {
+    setProfileGames(profileGames.map(g => g.appId === appId ? { ...g, weight: Math.max(1, Math.min(100, weight)) } : g))
+  }
 
   // ─── Загрузка ─────────────────────────────────────────────
 
@@ -299,9 +465,18 @@ export function FarmingPage() {
 
     setSmartLoading(true)
     try {
+      // Собираем профили для рандомного распределения по ботам
+      const selectedProfiles = profiles.filter(p => selectedProfileIds.has(p.id))
+      const profileWeightsList = selectedProfiles.map(p => {
+        const w: Record<string, number> = {}
+        for (const g of p.games) w[String(g.appId)] = g.weight
+        return w
+      })
+
       await api.post('/api/asf/farm/smart-start', {
         bot_names: botNames,
         app_ids: buildAppIds(),
+        game_weights_pool: profileWeightsList.length > 0 ? profileWeightsList : undefined,
         active_start_hour: activeStartHour,
         active_end_hour: activeEndHour,
         start_jitter_minutes: startJitter,
@@ -312,7 +487,7 @@ export function FarmingPage() {
         break_duration_minutes_max: breakDurationMax,
         game_rotation_hours: gameRotationHours,
         games_per_rotation: gamesPerRotation,
-        use_random_games: randomGames || buildAppIds().length === 0,
+        use_random_games: selectedProfiles.length === 0 && (randomGames || buildAppIds().length === 0),
         simulate_game_switching: simulateSwitching,
       })
       await fetchSmartSessions()
@@ -731,6 +906,105 @@ export function FarmingPage() {
                 </div>
               </div>
 
+              {/* Профиль игрока */}
+              <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4">
+                <div className="mb-3 flex items-center justify-between">
+                  <h2 className="flex items-center gap-2 font-semibold">
+                    <UserCircle className="h-4 w-4" />
+                    Профиль игрока
+                  </h2>
+                  <button
+                    onClick={openCreateProfile}
+                    className="flex items-center gap-1 rounded-md bg-[hsl(var(--muted))] px-2 py-1 text-xs hover:bg-[hsl(var(--accent))]"
+                  >
+                    <Plus className="h-3 w-3" />
+                    Создать
+                  </button>
+                </div>
+                <p className="mb-3 text-xs text-[hsl(var(--muted-foreground))]">
+                  Выбери один или несколько профилей. Каждому боту рандомно назначается один из выбранных.
+                  Если ничего не выбрано — равный рандом из пула F2P игр.
+                </p>
+
+                {/* Список профилей */}
+                <div className="space-y-1.5">
+                  {profiles.map((profile) => {
+                    const totalWeight = profile.games.reduce((s, g) => s + g.weight, 0)
+                    const isSelected = selectedProfileIds.has(profile.id)
+                    return (
+                      <label
+                        key={profile.id}
+                        className={cn(
+                          'flex cursor-pointer items-center gap-3 rounded-md border p-2.5 transition-colors',
+                          isSelected
+                            ? 'border-[hsl(var(--primary))] bg-[hsl(var(--primary)/0.1)]'
+                            : 'border-[hsl(var(--border))] hover:bg-[hsl(var(--accent)/0.5)]'
+                        )}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={() => {
+                            setSelectedProfileIds(prev => {
+                              const next = new Set(prev)
+                              if (next.has(profile.id)) next.delete(profile.id)
+                              else next.add(profile.id)
+                              return next
+                            })
+                          }}
+                          className="h-3.5 w-3.5 accent-[hsl(var(--primary))]"
+                        />
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-medium">{profile.name}</span>
+                          </div>
+                          <div className="mt-0.5 flex flex-wrap gap-1">
+                            {profile.games.slice(0, 5).map((g) => (
+                              <span
+                                key={g.appId}
+                                className="inline-flex items-center gap-1 rounded bg-[hsl(var(--muted))] px-1.5 py-0.5 text-[10px]"
+                              >
+                                {GAME_NAME_MAP[g.appId] || g.appId}
+                                <span className="text-[hsl(var(--muted-foreground))]">
+                                  {Math.round((g.weight / totalWeight) * 100)}%
+                                </span>
+                              </span>
+                            ))}
+                            {profile.games.length > 5 && (
+                              <span className="text-[10px] text-[hsl(var(--muted-foreground))]">
+                                +{profile.games.length - 5}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={(e) => { e.preventDefault(); openEditProfile(profile) }}
+                            className="rounded p-1 text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]"
+                            title="Редактировать"
+                          >
+                            <Pencil className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            onClick={(e) => { e.preventDefault(); handleDeleteProfile(profile.id) }}
+                            className="rounded p-1 text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--destructive))]"
+                            title="Удалить"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      </label>
+                    )
+                  })}
+
+                  {selectedProfileIds.size === 0 && (
+                    <p className="mt-1 text-xs text-[hsl(var(--muted-foreground))]">
+                      Ни один профиль не выбран — будет использован рандом из пула F2P игр
+                    </p>
+                  )}
+                </div>
+              </div>
+
               {/* Ротация игр */}
               <div className="rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-4">
                 <h2 className="mb-3 flex items-center gap-2 font-semibold">
@@ -975,6 +1249,114 @@ export function FarmingPage() {
           </div>
         </div>
       </div>
+
+      {/* ─── Модалка профиля игрока ─── */}
+      {showProfileModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+          <div className="w-full max-w-lg rounded-lg border border-[hsl(var(--border))] bg-[hsl(var(--card))] p-6 shadow-xl">
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-lg font-semibold">
+                {editingProfile ? 'Редактировать профиль' : 'Новый профиль'}
+              </h2>
+              <button onClick={() => setShowProfileModal(false)} className="text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--foreground))]">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Название */}
+            <div className="mb-4">
+              <label className="mb-1 block text-sm text-[hsl(var(--muted-foreground))]">Название профиля</label>
+              <input
+                value={profileName}
+                onChange={(e) => setProfileName(e.target.value)}
+                placeholder="CS2 Игрок"
+                className="w-full rounded-md border border-[hsl(var(--border-strong))] bg-[hsl(var(--input))] px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-[hsl(var(--ring))]"
+              />
+            </div>
+
+            {/* Игры и веса */}
+            <div className="mb-4">
+              <label className="mb-2 block text-sm text-[hsl(var(--muted-foreground))]">
+                Игры и веса (чем больше вес — тем чаще игра в ротации)
+              </label>
+              <div className="max-h-64 space-y-2 overflow-y-auto pr-1">
+                {profileGames.map((g) => {
+                  const totalWeight = profileGames.reduce((s, x) => s + x.weight, 0)
+                  const pct = totalWeight > 0 ? Math.round((g.weight / totalWeight) * 100) : 0
+                  return (
+                    <div key={g.appId} className="flex items-center gap-2">
+                      <span className="w-28 truncate text-sm font-medium">
+                        {GAME_NAME_MAP[g.appId] || `App ${g.appId}`}
+                      </span>
+                      <input
+                        type="range"
+                        min={1}
+                        max={100}
+                        value={g.weight}
+                        onChange={(e) => handleGameWeightChange(g.appId, parseInt(e.target.value))}
+                        className="h-1.5 flex-1 accent-[hsl(var(--primary))]"
+                      />
+                      <span className="w-10 text-right text-xs text-[hsl(var(--muted-foreground))]">
+                        {pct}%
+                      </span>
+                      <button
+                        onClick={() => handleRemoveGameFromProfile(g.appId)}
+                        className="text-[hsl(var(--muted-foreground))] hover:text-[hsl(var(--destructive))]"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+
+            {/* Добавить игру */}
+            <div className="mb-5 flex gap-2">
+              <select
+                value={addGameId}
+                onChange={(e) => setAddGameId(e.target.value)}
+                className="flex-1 rounded-md border border-[hsl(var(--border-strong))] bg-[hsl(var(--input))] px-2 py-1.5 text-sm outline-none"
+              >
+                <option value="">Добавить игру...</option>
+                {ALL_GAMES.filter(g => !profileGames.some(pg => pg.appId === g.appId)).map(g => (
+                  <option key={g.appId} value={g.appId}>{g.name}</option>
+                ))}
+              </select>
+              <input
+                placeholder="Или App ID"
+                value={addGameId && !ALL_GAMES.some(g => String(g.appId) === addGameId) ? addGameId : ''}
+                onChange={(e) => setAddGameId(e.target.value.replace(/\D/g, ''))}
+                className="w-24 rounded-md border border-[hsl(var(--border-strong))] bg-[hsl(var(--input))] px-2 py-1.5 text-center text-sm outline-none"
+              />
+              <button
+                onClick={handleAddGameToProfile}
+                disabled={!addGameId}
+                className="rounded-md bg-[hsl(var(--primary))] px-3 py-1.5 text-sm text-[hsl(var(--primary-foreground))] disabled:opacity-50"
+              >
+                <Plus className="h-4 w-4" />
+              </button>
+            </div>
+
+            {/* Кнопки */}
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setShowProfileModal(false)}
+                className="rounded-md border border-[hsl(var(--border))] px-4 py-2 text-sm hover:bg-[hsl(var(--accent))]"
+              >
+                Отмена
+              </button>
+              <button
+                onClick={handleSaveProfile}
+                disabled={!profileName.trim() || profileGames.filter(g => g.weight > 0).length === 0}
+                className="rounded-md bg-[hsl(var(--primary))] px-4 py-2 text-sm text-[hsl(var(--primary-foreground))] disabled:opacity-50"
+              >
+                {editingProfile ? 'Сохранить' : 'Создать'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

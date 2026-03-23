@@ -471,3 +471,223 @@ def _fetch_balance_sync(
                 pw.stop()
             except Exception:
                 pass
+
+
+# ── Комбинированный парсинг: баланс + прайм ──────────────────
+
+@dataclass
+class AccountInfoResult:
+    success: bool
+    balance: str | None = None
+    balance_usd: float | None = None
+    prime: bool | None = None
+    message: str = ""
+
+
+def _fetch_account_info_sync(
+    login: str,
+    password: str,
+    shared_secret: str | None = None,
+) -> AccountInfoResult:
+    """Sync: логин → баланс → проверка прайма через лицензии → закрытие."""
+    _ensure_proactor()
+    pw_inst = None
+    br = None
+    try:
+        pw_inst = sync_playwright().start()
+        br = pw_inst.chromium.launch(
+            headless=False,
+            args=["--window-position=-32000,-32000"],
+        )
+        ctx = br.new_context(viewport={"width": 1280, "height": 800}, locale="ru-RU")
+        pg = ctx.new_page()
+
+        balance = _steam_login(pg, login, password, shared_secret)
+        balance_usd = _parse_balance_to_usd(balance) if balance else None
+
+        prime = None
+        try:
+            pg.goto("https://store.steampowered.com/account/licenses/",
+                     wait_until="domcontentloaded", timeout=15000)
+            pg.wait_for_load_state("networkidle", timeout=15000)
+            time.sleep(1)
+            content = pg.content()
+            prime = (
+                "Prime Status Upgrade" in content
+                or "Counter-Strike 2 Prime" in content
+                or "CS:GO Prime" in content
+            )
+            logger.info("[AccountInfo] %s: prime=%s", login, prime)
+        except Exception as e:
+            logger.warning("[AccountInfo] %s: ошибка прайма: %s", login, e)
+
+        return AccountInfoResult(
+            success=True, message="OK",
+            balance=balance, balance_usd=balance_usd, prime=prime,
+        )
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return AccountInfoResult(success=False, message=str(e))
+    finally:
+        if br:
+            try:
+                br.close()
+            except Exception:
+                pass
+        if pw_inst:
+            try:
+                pw_inst.stop()
+            except Exception:
+                pass
+
+
+async def fetch_account_info(
+    login: str, password: str, shared_secret: str | None = None,
+) -> AccountInfoResult:
+    """Запускает парсинг баланса + прайма в чистом потоке."""
+    if not password:
+        return AccountInfoResult(success=False, message="Пароль пуст")
+    return await _run_in_clean_thread(_fetch_account_info_sync, login, password, shared_secret)
+
+
+# ── Проверка Community Badge ─────────────────────────────────
+
+@dataclass
+class BadgeCheckResult:
+    success: bool
+    badge_level: int = 0
+    badge_xp: int = 0
+    tasks_completed: int = 0
+    tasks_total: int = 0
+    tasks: list = None  # [{name, completed}]
+    message: str = ""
+
+    def __post_init__(self):
+        if self.tasks is None:
+            self.tasks = []
+
+
+def _check_badge_sync(
+    login: str,
+    password: str,
+    shared_secret: str | None = None,
+) -> BadgeCheckResult:
+    """Sync: логин → страница бейджа → парсинг прогресса."""
+    _ensure_proactor()
+    pw_b = None
+    br_b = None
+    try:
+        pw_b = sync_playwright().start()
+        br_b = pw_b.chromium.launch(
+            headless=False,
+            args=["--window-position=-32000,-32000"],
+        )
+        ctx = br_b.new_context(viewport={"width": 1280, "height": 800}, locale="en-US")
+        pg = ctx.new_page()
+
+        _steam_login(pg, login, password, shared_secret)
+
+        # Переходим на страницу Community Badge
+        pg.goto("https://steamcommunity.com/my/badges/2?l=english",
+                wait_until="domcontentloaded", timeout=20000)
+        pg.wait_for_load_state("networkidle", timeout=15000)
+        time.sleep(2)
+
+        # Сохраняем HTML для диагностики
+        try:
+            from pathlib import Path as _Path
+            html = pg.content()
+            dump_dir = _Path(__file__).parent.parent.parent / "error_dumps"
+            dump_dir.mkdir(exist_ok=True)
+            dump_path = dump_dir / f"badge_{login}.html"
+            dump_path.write_text(html[:500000], encoding="utf-8")
+            logger.info(f"[Badge] {login}: HTML сохранён в {dump_path}")
+        except Exception as e:
+            logger.warning(f"[Badge] {login}: не удалось сохранить HTML: {e}")
+
+        # Парсим задачи и прогресс через JS
+        data = pg.evaluate("""
+            () => {
+                const result = {
+                    badge_level: 0,
+                    badge_xp: 0,
+                    tasks: [],
+                    tasks_completed: 0,
+                    tasks_total: 0,
+                };
+
+                // Уровень бейджа — ищем в тексте страницы
+                const body = document.body.innerText;
+                if (body.includes('Community Patron')) result.badge_level = 4;
+                else if (body.includes('Community Leader')) result.badge_level = 3;
+                else if (body.includes('Community Ambassador')) result.badge_level = 2;
+                else if (body.includes('Pillar of Community')) result.badge_level = 1;
+
+                // XP
+                const xpMatch = body.match(/(\\d+)\\s*XP/);
+                if (xpMatch) result.badge_xp = parseInt(xpMatch[1]);
+
+                // Прогресс "N of M tasks completed"
+                const progressMatch = body.match(/(\\d+)\\s*of\\s*(\\d+)\\s*tasks?\\s*completed/i);
+                if (progressMatch) {
+                    result.tasks_completed = parseInt(progressMatch[1]);
+                    result.tasks_total = parseInt(progressMatch[2]);
+                }
+
+                // Задачи — структура Steam:
+                // div.badge_task > img.quest_icon (src содержит _on.png или _off.png)
+                //                > div.badge_task_name (текст задачи)
+                const taskEls = document.querySelectorAll('.badge_task');
+                for (const el of taskEls) {
+                    const nameEl = el.querySelector('.badge_task_name');
+                    if (!nameEl) continue;
+                    const name = nameEl.textContent.trim();
+                    if (!name) continue;
+
+                    const img = el.querySelector('img.quest_icon');
+                    const src = img ? img.src : '';
+                    const completed = src.includes('_on.png');
+
+                    result.tasks.push({ name, completed });
+                }
+
+                return result;
+            }
+        """)
+
+        logger.info("[Badge] %s: level=%s xp=%s tasks=%s/%s",
+                     login, data.get('badge_level'), data.get('badge_xp'),
+                     data.get('tasks_completed'), data.get('tasks_total'))
+
+        return BadgeCheckResult(
+            success=True,
+            badge_level=data.get('badge_level', 0),
+            badge_xp=data.get('badge_xp', 0),
+            tasks_completed=data.get('tasks_completed', 0),
+            tasks_total=data.get('tasks_total', 0),
+            tasks=data.get('tasks', []),
+            message="OK",
+        )
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return BadgeCheckResult(success=False, message=str(e))
+
+    finally:
+        if br_b:
+            try: br_b.close()
+            except Exception: pass
+        if pw_b:
+            try: pw_b.stop()
+            except Exception: pass
+
+
+async def check_community_badge(
+    login: str, password: str, shared_secret: str | None = None,
+) -> BadgeCheckResult:
+    """Проверяет прогресс Community Badge."""
+    if not password:
+        return BadgeCheckResult(success=False, message="Пароль пуст")
+    return await _run_in_clean_thread(_check_badge_sync, login, password, shared_secret)
