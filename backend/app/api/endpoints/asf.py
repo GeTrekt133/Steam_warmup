@@ -27,11 +27,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.endpoints.auth import get_current_user
-from app.database import get_db
+from app.database import get_db, async_session
 from app.models.account import Account
 from app.models.proxy import Proxy
 from app.models.user import User
 from app.services import asf_manager, asf_ipc
+from app.services.session_persistence import save_farming_session
 
 router = APIRouter()
 
@@ -106,6 +107,28 @@ class FarmStartRequest(BaseModel):
 
 class FarmStopRequest(BaseModel):
     bot_names: list[str]
+
+
+class SmartFarmStartRequest(BaseModel):
+    bot_names: list[str]
+    app_ids: list[int] = []
+    game_weights_pool: list[dict[str, int]] | None = None  # массив профилей, каждому боту — рандомный
+    active_start_hour: int = 8
+    active_end_hour: int = 23
+    start_jitter_minutes: int = 30
+    stop_jitter_minutes: int = 30
+    break_interval_hours_min: float = 2.0
+    break_interval_hours_max: float = 4.0
+    break_duration_minutes_min: int = 15
+    break_duration_minutes_max: int = 45
+    game_rotation_hours: float = 3.0
+    games_per_rotation: int = 1
+    use_random_games: bool = True
+    simulate_game_switching: bool = True
+
+
+class SmartFarmStopRequest(BaseModel):
+    session_id: str
 
 
 class RawCommandRequest(BaseModel):
@@ -530,6 +553,16 @@ async def farm_start(
                 "started_at": time.time(),
                 "owner_id": current_user.id,
             }
+            # Сохраняем в БД
+            try:
+                async with async_session() as db:
+                    await save_farming_session(
+                        db, bot_name=bot_name, owner_id=current_user.id,
+                        status="active", session_type="manual",
+                        app_ids=bot_apps, hours_target=req.hours_target,
+                    )
+            except Exception:
+                pass
         else:
             errors.append(bot_name)
 
@@ -595,6 +628,15 @@ async def farm_stop(
             stopped.append(bot_name)
             session_key = f"{current_user.id}:{bot_name}"
             _farm_sessions.pop(session_key, None)
+            # Обновляем в БД
+            try:
+                async with async_session() as db:
+                    await save_farming_session(
+                        db, bot_name=bot_name, owner_id=current_user.id,
+                        status="stopped",
+                    )
+            except Exception:
+                pass
         else:
             errors.append(bot_name)
 
@@ -603,7 +645,7 @@ async def farm_stop(
 
 @router.get("/farm/sessions")
 async def farm_sessions(current_user: User = Depends(get_current_user)):
-    """Активные сессии фарма часов для текущего пользователя."""
+    """Активные сессии фарма часов для текущего пользователя (in-memory)."""
     now = time.time()
     user_sessions = [
         {
@@ -614,6 +656,134 @@ async def farm_sessions(current_user: User = Depends(get_current_user)):
         if s["owner_id"] == current_user.id
     ]
     return {"sessions": user_sessions}
+
+
+@router.get("/farm/sessions-db")
+async def farm_sessions_db(
+    include_finished: bool = False,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Сессии фарма из БД (персистентные, переживают рестарт)."""
+    from app.services.session_persistence import get_farming_sessions
+    import json
+
+    sessions = await get_farming_sessions(db, owner_id=current_user.id, include_finished=include_finished)
+    return {
+        "sessions": [
+            {
+                "id": s.id,
+                "bot_name": s.bot_name,
+                "session_type": s.session_type,
+                "status": s.status,
+                "app_ids": json.loads(s.app_ids_json) if s.app_ids_json else [],
+                "hours_target": s.hours_target,
+                "hours_farmed": s.hours_farmed,
+                "breaks_taken": s.breaks_taken,
+                "rotations_done": s.rotations_done,
+                "error": s.error,
+                "started_at": s.started_at.isoformat() if s.started_at else None,
+                "finished_at": s.finished_at.isoformat() if s.finished_at else None,
+            }
+            for s in sessions
+        ]
+    }
+
+
+# ─── Smart Farming ───────────────────────────────────────────
+
+
+@router.post("/farm/smart-start")
+async def farm_smart_start(
+    req: SmartFarmStartRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Запустить Smart Farming — фарм с расписанием, перерывами и ротацией игр.
+
+    Параметры:
+    - bot_names: список ботов ASF
+    - active_start_hour/active_end_hour: окно активности (часы 0–23)
+    - break_interval_*: интервал перерывов
+    - break_duration_*: длительность перерывов
+    - game_rotation_hours: интервал ротации игр
+    - use_random_games: случайные игры из пула F2P
+    """
+    from app.services.smart_farming import SmartFarmingConfig, start_smart_farming
+
+    if not req.bot_names:
+        raise HTTPException(status_code=400, detail="Список ботов пуст")
+
+    # Конвертируем пул профилей: [{"730": 60}, {"570": 50}] → [{730: 60}, {570: 50}]
+    weights_pool: list[dict[int, int]] = []
+    if req.game_weights_pool:
+        for wp in req.game_weights_pool:
+            weights_pool.append({int(k): v for k, v in wp.items()})
+
+    import random as _random
+
+    # Для каждого бота — рандомный профиль из пула (или без профиля)
+    results = []
+    for bot_name in req.bot_names:
+        bot_weights: dict[int, int] = {}
+        if weights_pool:
+            bot_weights = _random.choice(weights_pool)
+
+        config = SmartFarmingConfig(
+            bot_names=[bot_name],
+            app_ids=req.app_ids,
+            game_weights=bot_weights,
+            active_start_hour=req.active_start_hour,
+            active_end_hour=req.active_end_hour,
+            start_jitter_minutes=req.start_jitter_minutes,
+            stop_jitter_minutes=req.stop_jitter_minutes,
+            break_interval_hours_min=req.break_interval_hours_min,
+            break_interval_hours_max=req.break_interval_hours_max,
+            break_duration_minutes_min=req.break_duration_minutes_min,
+            break_duration_minutes_max=req.break_duration_minutes_max,
+            game_rotation_hours=req.game_rotation_hours,
+            games_per_rotation=req.games_per_rotation,
+            use_random_games=req.use_random_games and not bot_weights,
+            simulate_game_switching=req.simulate_game_switching,
+        )
+
+        session = await start_smart_farming(config, owner_id=current_user.id)
+        results.append({
+            "session_id": session.session_id,
+            "bot_name": bot_name,
+            "status": session.status,
+            "profile_games": list(bot_weights.keys()) if bot_weights else "random_pool",
+        })
+
+    return {"sessions": results}
+
+
+@router.post("/farm/smart-stop")
+async def farm_smart_stop(
+    req: SmartFarmStopRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """Остановить Smart Farming сессию."""
+    from app.services.smart_farming import stop_smart_farming, get_smart_session
+
+    session = get_smart_session(req.session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Сессия не найдена")
+    if session.owner_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Нет доступа к этой сессии")
+
+    success = await stop_smart_farming(req.session_id)
+    if not success:
+        raise HTTPException(status_code=500, detail="Не удалось остановить сессию")
+
+    return {"session_id": req.session_id, "status": "stopped"}
+
+
+@router.get("/farm/smart-sessions")
+async def farm_smart_sessions(current_user: User = Depends(get_current_user)):
+    """Список Smart Farming сессий текущего пользователя."""
+    from app.services.smart_farming import get_smart_sessions
+    return {"sessions": get_smart_sessions(owner_id=current_user.id)}
 
 
 # ─── Raw команда ─────────────────────────────────────────────

@@ -5,9 +5,15 @@
     python -m uvicorn app.main:app --reload --port 8420
 """
 
+import logging
 from contextlib import asynccontextmanager
 
 import uvicorn
+
+# Включаем логи warmup/farming сервисов
+logging.basicConfig(level=logging.INFO)
+logging.getLogger("app.services").setLevel(logging.DEBUG)
+logging.getLogger("app.api.endpoints").setLevel(logging.DEBUG)
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -21,7 +27,14 @@ async def lifespan(app: FastAPI):
     """Создаёт таблицы при старте (dev mode)."""
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+    # Запускаем фоновый health check ASF
+    from app.services.asf_manager import start_health_check, stop_health_check
+    start_health_check()
+
     yield
+
+    stop_health_check()
 
 
 app = FastAPI(

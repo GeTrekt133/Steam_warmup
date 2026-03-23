@@ -21,6 +21,10 @@ import {
   Pickaxe,
   Gift,
   Wallet,
+  Shield,
+  RefreshCw,
+  Sparkles,
+  Mail,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -40,7 +44,14 @@ interface Account {
   addedAt: string        // дата добавления (ISO)
   rank?: number          // ранг аккаунта
   exp?: number           // опыт аккаунта
+  cs2Level?: number | null     // уровень профиля CS2 (1-40)
+  cs2Xp?: number | null        // текущий XP в CS2
+  premierRank?: number | null  // Premier рейтинг
+  vacBanned?: boolean | null   // VAC бан в CS2 (null = не проверен)
   status: string         // текущий статус аккаунта (wait, farming, warmup, drop и тд)
+  prime?: boolean | null  // CS2 Prime статус (null = не проверен)
+  email?: string         // email аккаунта (для привязки Guard)
+  emailPassword?: string // пароль от email
   isFarmed: boolean      // аккаунт зафармлен
   isDropCollected: boolean // дроп собран
   dropValue?: number     // сумма дропов в долларах
@@ -59,6 +70,13 @@ function loadAccounts(): Account[] {
     return parsed.map((a) => ({
       ...a,
       status: a.status === 'wait' ? 'waiting' : (a.status ?? 'waiting'),
+      prime: a.prime ?? null,
+      cs2Level: a.cs2Level ?? null,
+      cs2Xp: a.cs2Xp ?? null,
+      premierRank: a.premierRank ?? null,
+      vacBanned: a.vacBanned ?? null,
+      email: a.email ?? undefined,
+      emailPassword: a.emailPassword ?? undefined,
       isFarmed: a.isFarmed ?? false,
       isDropCollected: a.isDropCollected ?? false,
       dropValue: a.dropValue ?? 0,
@@ -285,28 +303,163 @@ export function AccountsPage() {
     setContextMenu(null)
   }
 
-  async function handleParseBalance(account: Account) {
+  async function handleParseInfo(account: Account) {
     const ids = getTargetIds(account)
     const targets = accounts.filter((a) => ids.has(a.id))
     setContextMenu(null)
     for (const acc of targets) {
       try {
-        const res = await api.post('/api/accounts/parse-balance', {
+        const res = await api.post('/api/accounts/parse-info', {
           login: acc.login,
           password: acc.password,
           shared_secret: acc.sharedSecret || undefined,
         }, { timeout: 120000 })
-        if (res.data.success && res.data.balance) {
+        if (res.data.success) {
           setAccounts((prev) => {
             const updated = prev.map((a) =>
-              a.id === acc.id ? { ...a, balance: res.data.balance, balanceUsd: res.data.balance_usd ?? undefined } : a
+              a.id === acc.id ? {
+                ...a,
+                balance: res.data.balance ?? a.balance,
+                balanceUsd: res.data.balance_usd ?? a.balanceUsd,
+                prime: res.data.prime ?? a.prime,
+              } : a
             )
             saveAccounts(updated)
             return updated
           })
         }
       } catch (e: any) {
-        console.error(`[balance] Ошибка для ${acc.login}:`, e.response?.data?.detail || e.message)
+        console.error(`[info] Ошибка для ${acc.login}:`, e.response?.data?.detail || e.message)
+      }
+    }
+  }
+
+  // Результаты привязки Steam Guard
+  const [guardResults, setGuardResults] = useState<{login: string; success: boolean; revocation_code?: string; error?: string}[] | null>(null)
+
+  // Привязка Steam Guard
+  async function handleLinkGuard(account: Account) {
+    const ids = getTargetIds(account)
+    const targets = accounts.filter((a) => ids.has(a.id))
+    // Фильтруем: только аккаунты с email и emailPassword, без maFile
+    const eligible = targets.filter((a) => a.email && a.emailPassword && !a.maFile)
+    if (eligible.length === 0) return
+    setContextMenu(null)
+
+    try {
+      const res = await api.post('/api/accounts/link-guard-batch', {
+        accounts: eligible.map((a) => ({
+          login: a.login,
+          password: a.password,
+          email: a.email,
+          email_password: a.emailPassword,
+        })),
+      }, { timeout: 300000 })
+
+      const results: {login: string; success: boolean; revocation_code?: string; error?: string; shared_secret?: string; mafile_json?: string; steam_id?: string}[] = res.data.results || []
+
+      // Обновляем аккаунты в стейте
+      setAccounts((prev) => {
+        const updated = prev.map((a) => {
+          const result = results.find((r) => r.login === a.login)
+          if (result?.success) {
+            return {
+              ...a,
+              maFile: true,
+              sharedSecret: result.shared_secret || a.sharedSecret,
+              maFileJson: result.mafile_json || a.maFileJson,
+              steamId: result.steam_id || a.steamId,
+            }
+          }
+          return a
+        })
+        saveAccounts(updated)
+        return updated
+      })
+
+      setGuardResults(results.map((r) => ({
+        login: r.login,
+        success: r.success,
+        revocation_code: r.revocation_code,
+        error: r.error,
+      })))
+    } catch (e: any) {
+      setGuardResults(eligible.map((a) => ({
+        login: a.login,
+        success: false,
+        error: e.response?.data?.detail || e.message || 'Ошибка запроса',
+      })))
+    }
+  }
+
+  // Проверка Community Badge
+  const [badgeResult, setBadgeResult] = useState<{ login: string; badge_level: number; tasks_completed: number; tasks_total: number; tasks: { name: string; completed: boolean }[] } | null>(null)
+
+  async function handleCheckBadge(account: Account) {
+    const ids = getTargetIds(account)
+    const targets = accounts.filter((a) => ids.has(a.id))
+    setContextMenu(null)
+    setBadgeResult(null)
+    for (const acc of targets) {
+      try {
+        const res = await api.post('/api/accounts/check-badge', {
+          login: acc.login,
+          password: acc.password,
+          shared_secret: acc.sharedSecret || undefined,
+        }, { timeout: 120000 })
+        if (res.data.success) {
+          setBadgeResult({
+            login: acc.login,
+            badge_level: res.data.badge_level,
+            tasks_completed: res.data.tasks_completed,
+            tasks_total: res.data.tasks_total,
+            tasks: res.data.tasks || [],
+          })
+        }
+      } catch (e: any) {
+        console.error(`[badge] Ошибка для ${acc.login}:`, e.response?.data?.detail || e.message)
+      }
+    }
+  }
+
+  // Получение CS2 профиля через Game Coordinator
+  async function handleFetchCS2Profile(account: Account) {
+    const ids = getTargetIds(account)
+    const targets = accounts.filter((a) => ids.has(a.id))
+    setContextMenu(null)
+    for (const acc of targets) {
+      try {
+        const res = await api.post('/api/accounts/cs2-profile', {
+          login: acc.login,
+          password: acc.password,
+          shared_secret: acc.sharedSecret || undefined,
+        }, { timeout: 45000 })
+        console.log('[cs2-profile] ответ:', res.data)
+        if (res.data.success) {
+          setAccounts((prev) => {
+            const updated = prev.map((a) =>
+              a.id === acc.id ? {
+                ...a,
+                cs2Level: res.data.player_level,
+                cs2Xp: res.data.player_cur_xp,
+                vacBanned: res.data.vac_banned > 0,
+                status: a.status === 'in_game' ? 'waiting' : a.status,
+              } : a
+            )
+            saveAccounts(updated)
+            return updated
+          })
+        } else if (res.data.error?.includes('LoggedInElsewhere')) {
+          setAccounts((prev) => {
+            const updated = prev.map((a) =>
+              a.id === acc.id ? { ...a, status: 'in_game' } : a
+            )
+            saveAccounts(updated)
+            return updated
+          })
+        }
+      } catch (e: any) {
+        console.error(`[cs2] Ошибка для ${acc.login}:`, e.response?.data?.detail || e.message)
       }
     }
   }
@@ -395,14 +548,49 @@ export function AccountsPage() {
         </div>
         <div className="flex items-center gap-2">
           {selectedIds.size > 0 && (
-            <Button
-              variant="destructive"
-              size="sm"
-              onClick={handleDeleteSelected}
-            >
-              <Trash2 className="h-4 w-4" />
-              Удалить выбранные ({selectedIds.size})
-            </Button>
+            <>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  const firstSelected = accounts.find((a) => selectedIds.has(a.id))
+                  if (firstSelected) handleParseInfo(firstSelected)
+                }}
+              >
+                <RefreshCw className="h-4 w-4" />
+                Обновить прайм и баланс ({selectedIds.size})
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  const firstSelected = accounts.find((a) => selectedIds.has(a.id))
+                  if (firstSelected) handleFetchCS2Profile(firstSelected)
+                }}
+              >
+                <ShieldCheck className="h-4 w-4" />
+                CS2 профиль ({selectedIds.size})
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  const firstSelected = accounts.find((a) => selectedIds.has(a.id))
+                  if (firstSelected) handleLinkGuard(firstSelected)
+                }}
+              >
+                <Shield className="h-4 w-4" />
+                Привязать Guard ({selectedIds.size})
+              </Button>
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={handleDeleteSelected}
+              >
+                <Trash2 className="h-4 w-4" />
+                Удалить выбранные ({selectedIds.size})
+              </Button>
+            </>
           )}
           <Button
             variant="outline"
@@ -452,10 +640,12 @@ export function AccountsPage() {
               <TableHead>Логин</TableHead>
               <TableHead className="w-28">Статус</TableHead>
               <TableHead className="w-28">Steam ID</TableHead>
-              <TableHead className="w-20">Ранг</TableHead>
-              <TableHead className="w-20">EXP</TableHead>
               <TableHead className="w-32">maFile</TableHead>
               <TableHead className="w-28">Баланс</TableHead>
+              <TableHead className="w-20 text-center">Прайм</TableHead>
+              <TableHead className="w-16 text-center">CS2 Lvl</TableHead>
+              <TableHead className="w-20 text-center">CS2 XP</TableHead>
+              <TableHead className="w-16 text-center">VAC</TableHead>
               <TableHead className="w-28 text-center">Зафармлен</TableHead>
               <TableHead className="w-28 text-center">Дроп собран</TableHead>
               <TableHead className="w-40">Добавлен</TableHead>
@@ -488,17 +678,15 @@ export function AccountsPage() {
                   {idx + 1}
                 </TableCell>
                 <TableCell className="font-medium">{account.login}</TableCell>
-                <TableCell className="text-sm text-[hsl(var(--muted-foreground))]">
-                  {account.status}
+                <TableCell className="text-sm">
+                  {account.status === 'in_game' ? (
+                    <span className="text-blue-400">В игре</span>
+                  ) : (
+                    <span className="text-[hsl(var(--muted-foreground))]">{account.status}</span>
+                  )}
                 </TableCell>
                 <TableCell className="text-xs text-[hsl(var(--muted-foreground))] font-mono">
                   {account.steamId || '—'}
-                </TableCell>
-                <TableCell className="text-center text-sm">
-                  {account.rank ?? '—'}
-                </TableCell>
-                <TableCell className="text-center text-sm">
-                  {account.exp ?? '—'}
                 </TableCell>
                 <TableCell>
                   {account.maFile ? (
@@ -522,6 +710,42 @@ export function AccountsPage() {
                       )}
                     </div>
                   ) : '—'}
+                </TableCell>
+                <TableCell className="text-center text-sm">
+                  {account.prime === true && (
+                    <span className="text-emerald-400" title="Prime активен">&#10003;</span>
+                  )}
+                  {account.prime === false && (
+                    <span className="text-red-400" title="Prime не куплен">&#10007;</span>
+                  )}
+                  {(account.prime == null) && (
+                    <span className="text-[hsl(var(--muted-foreground))]" title="Не проверено">&mdash;</span>
+                  )}
+                </TableCell>
+                <TableCell className="text-center text-sm">
+                  {account.cs2Level != null ? (
+                    <span>{account.cs2Level}</span>
+                  ) : (
+                    <span className="text-[hsl(var(--muted-foreground))]">&mdash;</span>
+                  )}
+                </TableCell>
+                <TableCell className="text-center text-sm">
+                  {account.cs2Xp != null ? (
+                    <span>{Math.max(0, account.cs2Xp - 327680000).toLocaleString()}</span>
+                  ) : (
+                    <span className="text-[hsl(var(--muted-foreground))]">&mdash;</span>
+                  )}
+                </TableCell>
+                <TableCell className="text-center text-sm">
+                  {account.vacBanned === true && (
+                    <span className="text-red-500 font-bold" title="VAC бан в CS2">VAC</span>
+                  )}
+                  {account.vacBanned === false && (
+                    <span className="text-emerald-400" title="Нет VAC бана">Чист</span>
+                  )}
+                  {(account.vacBanned == null) && (
+                    <span className="text-[hsl(var(--muted-foreground))]">&mdash;</span>
+                  )}
                 </TableCell>
                 <TableCell className="text-center">
                   <input
@@ -563,7 +787,7 @@ export function AccountsPage() {
             ))}
             {filtered.length === 0 && (
               <TableRow>
-                <TableCell colSpan={13} className="text-center py-8 text-[hsl(var(--muted-foreground))]">
+                <TableCell colSpan={15} className="text-center py-8 text-[hsl(var(--muted-foreground))]">
                   Ничего не найдено
                 </TableCell>
               </TableRow>
@@ -585,12 +809,88 @@ export function AccountsPage() {
           }
           onClose={() => setContextMenu(null)}
           onOpenBrowser={handleOpenInBrowser}
-          onParseBalance={handleParseBalance}
+          onParseInfo={handleParseInfo}
+          onFetchCS2Profile={handleFetchCS2Profile}
+          onCheckBadge={handleCheckBadge}
           onCollectDrop={handleCollectDrop}
+          onLinkGuard={handleLinkGuard}
           onToggleFarmed={handleToggleFarmed}
           onToggleDropCollected={handleToggleDropCollected}
           onDelete={handleDeleteFromMenu}
         />
+      )}
+
+      {/* Модалка результата проверки бейджа */}
+      {badgeResult && (
+        <Modal open={true} onClose={() => setBadgeResult(null)} className="max-w-lg">
+          <ModalHeader onClose={() => setBadgeResult(null)}>
+            Community Badge — {badgeResult.login}
+          </ModalHeader>
+          <ModalBody>
+            <div className="space-y-3">
+              <div className="flex items-center gap-4 text-sm">
+                <div>
+                  <span className="text-[hsl(var(--muted-foreground))]">Уровень бейджа: </span>
+                  <span className="font-bold text-amber-400">{badgeResult.badge_level || 'Нет'}</span>
+                </div>
+                <div>
+                  <span className="text-[hsl(var(--muted-foreground))]">Задачи: </span>
+                  <span className="font-bold">{badgeResult.tasks_completed}/{badgeResult.tasks_total}</span>
+                </div>
+              </div>
+              {badgeResult.tasks.length > 0 && (
+                <div className="space-y-1 max-h-64 overflow-y-auto">
+                  {badgeResult.tasks.map((task, i) => (
+                    <div key={i} className={cn(
+                      'flex items-center gap-2 text-sm px-2 py-1 rounded',
+                      task.completed ? 'text-emerald-400' : 'text-[hsl(var(--muted-foreground))]'
+                    )}>
+                      <span>{task.completed ? '✓' : '✗'}</span>
+                      <span>{task.name}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {badgeResult.tasks.length === 0 && badgeResult.tasks_total === 0 && (
+                <p className="text-sm text-[hsl(var(--muted-foreground))]">
+                  Бейдж ещё не начат или не удалось спарсить задачи
+                </p>
+              )}
+            </div>
+          </ModalBody>
+        </Modal>
+      )}
+
+      {/* Модалка результатов привязки Steam Guard */}
+      {guardResults && (
+        <Modal open={true} onClose={() => setGuardResults(null)} className="max-w-lg">
+          <ModalHeader onClose={() => setGuardResults(null)}>
+            Привязка Steam Guard
+          </ModalHeader>
+          <ModalBody>
+            <div className="space-y-2 max-h-80 overflow-y-auto">
+              {guardResults.map((r, i) => (
+                <div
+                  key={i}
+                  className={cn(
+                    'flex items-center gap-2 text-sm px-3 py-2 rounded-md',
+                    r.success
+                      ? 'bg-[hsl(var(--success)/0.1)] text-emerald-400'
+                      : 'bg-[hsl(var(--destructive)/0.1)] text-red-400'
+                  )}
+                >
+                  <span>{r.success ? '\u2713' : '\u2717'}</span>
+                  <span className="font-medium">{r.login}</span>
+                  <span className="text-xs text-[hsl(var(--muted-foreground))] ml-auto">
+                    {r.success && r.revocation_code
+                      ? `Код отмены: ${r.revocation_code}`
+                      : r.error || ''}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </ModalBody>
+        </Modal>
       )}
 
       {/* Модалка импорта (для существующих аккаунтов) */}
@@ -623,8 +923,11 @@ function AccountContextMenu({
   allTargets,
   onClose,
   onOpenBrowser,
-  onParseBalance,
+  onParseInfo,
+  onFetchCS2Profile,
+  onCheckBadge,
   onCollectDrop,
+  onLinkGuard,
   onToggleFarmed,
   onToggleDropCollected,
   onDelete,
@@ -635,8 +938,11 @@ function AccountContextMenu({
   allTargets: Account[]
   onClose: () => void
   onOpenBrowser: (acc: Account) => void
-  onParseBalance: (acc: Account) => void
+  onParseInfo: (acc: Account) => void
+  onFetchCS2Profile: (acc: Account) => void
+  onCheckBadge: (acc: Account) => void
   onCollectDrop: (acc: Account) => void
+  onLinkGuard: (acc: Account) => void
   onToggleFarmed: (acc: Account) => void
   onToggleDropCollected: (acc: Account) => void
   onDelete: (acc: Account) => void
@@ -713,14 +1019,29 @@ function AccountContextMenu({
       onClick: () => onOpenBrowser(account),
     },
     {
-      label: multi ? `Обновить баланс (${allTargets.length})` : 'Обновить баланс',
-      icon: Wallet,
-      onClick: () => onParseBalance(account),
+      label: multi ? `Обновить прайм и баланс (${allTargets.length})` : 'Обновить прайм и баланс',
+      icon: RefreshCw,
+      onClick: () => onParseInfo(account),
+    },
+    {
+      label: multi ? `CS2 профиль (${allTargets.length})` : 'CS2 профиль',
+      icon: ShieldCheck,
+      onClick: () => onFetchCS2Profile(account),
+    },
+    {
+      label: 'Проверить бейдж',
+      icon: Sparkles,
+      onClick: () => onCheckBadge(account),
     },
     {
       label: 'Собрать дроп',
       icon: Package,
       onClick: () => onCollectDrop(account),
+    },
+    {
+      label: multi ? `Привязать Guard (${allTargets.length})` : 'Привязать Guard',
+      icon: Shield,
+      onClick: () => onLinkGuard(account),
     },
     { type: 'separator' },
     {
@@ -848,50 +1169,131 @@ function ImportWizardContent({ onDone, onCancel, existingAccounts }: ImportWizar
   const [txtError, setTxtError] = useState('')
   const [maResult, setMaResult] = useState<{ matched: number; total: number } | null>(null)
 
+  const [emailResult, setEmailResult] = useState<{ matched: number; total: number } | null>(null)
+
   const txtInputRef = useRef<HTMLInputElement>(null)
   const maInputRef = useRef<HTMLInputElement>(null)
+  const emailInputRef = useRef<HTMLInputElement>(null)
 
-  // ─── Шаг 1: Импорт TXT (через <input type="file">) ─────
-  function handleTxtClick() {
-    txtInputRef.current?.click()
+  // Проверяем, доступен ли Electron API
+  const isElectron = !!(window as any).electronAPI?.openFile
+
+  // ─── Общая обработка содержимого TXT ─────
+  function processTxtContent(content: string) {
+    setTxtError('')
+    const { accounts, totalInFile, skippedDuplicates } = parseTxtAccounts(content, existingAccounts)
+
+    if (totalInFile === 0) {
+      setTxtError('Файл пуст или не содержит строк в формате логин:пароль')
+      return
+    }
+
+    if (accounts.length === 0 && skippedDuplicates > 0) {
+      setTxtError(`Все ${skippedDuplicates} ${pluralAccounts(skippedDuplicates)} из файла уже добавлены`)
+      return
+    }
+
+    setParsedAccounts(accounts)
+    setStep('mafiles')
+  }
+
+  // ─── Шаг 1: Импорт TXT ─────
+  async function handleTxtClick() {
+    if (isElectron) {
+      // Electron: нативный диалог
+      try {
+        const electronAPI = (window as any).electronAPI
+        const result = await electronAPI.openFile({
+          title: 'Выберите TXT файл с аккаунтами',
+          filters: [{ name: 'Text Files', extensions: ['txt'] }],
+          properties: ['openFile'],
+        })
+        if (result.canceled || !result.filePaths?.length) return
+        const content = await electronAPI.readTextFile(result.filePaths[0])
+        processTxtContent(content)
+      } catch {
+        setTxtError('Ошибка чтения файла')
+      }
+    } else {
+      // Браузер: скрытый input
+      txtInputRef.current?.click()
+    }
   }
 
   function handleTxtFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
     if (!file) return
 
-    setTxtError('')
-
     const reader = new FileReader()
     reader.onload = (ev) => {
-      const content = ev.target?.result as string
-      const { accounts, totalInFile, skippedDuplicates } = parseTxtAccounts(content, existingAccounts)
-
-      if (totalInFile === 0) {
-        setTxtError('Файл пуст или не содержит строк в формате логин:пароль')
-        return
-      }
-
-      if (accounts.length === 0 && skippedDuplicates > 0) {
-        setTxtError(`Все ${skippedDuplicates} ${pluralAccounts(skippedDuplicates)} из файла уже добавлены`)
-        return
-      }
-
-      setParsedAccounts(accounts)
-      setStep('mafiles')
+      processTxtContent(ev.target?.result as string)
     }
-    reader.onerror = () => {
-      setTxtError('Ошибка чтения файла')
-    }
+    reader.onerror = () => setTxtError('Ошибка чтения файла')
     reader.readAsText(file, 'utf-8')
-
-    // Сбрасываем input чтобы можно было выбрать тот же файл повторно
     e.target.value = ''
   }
 
-  // ─── Шаг 2: Импорт maFiles (через <input type="file" multiple>) ─
-  function handleMaClick() {
-    maInputRef.current?.click()
+  // ─── Общая обработка maFile содержимого ─────
+  function processMaFileContent(content: string, updatedAccounts: Account[]): boolean {
+    try {
+      const json = JSON.parse(content)
+      const accountName: string | undefined = json.account_name
+
+      if (accountName) {
+        const account = updatedAccounts.find(
+          (a) => a.login.toLowerCase() === accountName.toLowerCase() && !a.maFile
+        )
+        if (account) {
+          account.maFile = true
+          account.maFileName = accountName + '.maFile'
+          if (json.shared_secret) {
+            account.sharedSecret = json.shared_secret
+          }
+          account.maFileJson = content
+          if (json.Session?.SteamID) {
+            account.steamId = String(json.Session.SteamID)
+          }
+          return true
+        }
+      }
+    } catch {
+      // Битый maFile
+    }
+    return false
+  }
+
+  // ─── Шаг 2: Импорт maFiles ─────
+  async function handleMaClick() {
+    if (isElectron) {
+      // Electron: нативный диалог
+      try {
+        const electronAPI = (window as any).electronAPI
+        const result = await electronAPI.openFile({
+          title: 'Выберите maFile файлы',
+          filters: [{ name: 'maFile', extensions: ['maFile', 'mafile'] }],
+          properties: ['openFile', 'multiSelections'],
+        })
+        if (result.canceled || !result.filePaths?.length) return
+
+        let matched = 0
+        const total = result.filePaths.length
+        const updatedAccounts = [...parsedAccounts]
+
+        for (const filePath of result.filePaths) {
+          const content = await electronAPI.readFile(filePath)
+          if (processMaFileContent(content, updatedAccounts)) matched++
+        }
+
+        setParsedAccounts([...updatedAccounts])
+        setMaResult({ matched, total })
+        setStep('done')
+      } catch {
+        // Диалог отменён или ошибка
+      }
+    } else {
+      // Браузер: скрытый input
+      maInputRef.current?.click()
+    }
   }
 
   function handleMaFilesChange(e: React.ChangeEvent<HTMLInputElement>) {
@@ -904,47 +1306,87 @@ function ImportWizardContent({ onDone, onCancel, existingAccounts }: ImportWizar
     const updatedAccounts = [...parsedAccounts]
 
     for (let i = 0; i < files.length; i++) {
-      const file = files[i]
       const reader = new FileReader()
       reader.onload = (ev) => {
         processed++
-        try {
-          const content = ev.target?.result as string
-          const json = JSON.parse(content)
-          const accountName: string | undefined = json.account_name
+        if (processMaFileContent(ev.target?.result as string, updatedAccounts)) matched++
 
-          if (accountName) {
-            const account = updatedAccounts.find(
-              (a) => a.login.toLowerCase() === accountName.toLowerCase() && !a.maFile
-            )
-            if (account) {
-              account.maFile = true
-              account.maFileName = accountName + '.maFile'
-              if (json.shared_secret) {
-                account.sharedSecret = json.shared_secret
-              }
-              // Сохраняем полный maFile JSON для ASF
-              account.maFileJson = content
-              if (json.Session?.SteamID) {
-                account.steamId = String(json.Session.SteamID)
-              }
-              matched++
-            }
-          }
-        } catch {
-          // Пропускаем битые maFile
-        }
-
-        // Когда все файлы обработаны
         if (processed === total) {
           setParsedAccounts([...updatedAccounts])
           setMaResult({ matched, total })
           setStep('done')
         }
       }
-      reader.readAsText(file, 'utf-8')
+      reader.readAsText(files[i], 'utf-8')
+    }
+    e.target.value = ''
+  }
+
+  // ─── Импорт email TXT (альтернатива maFile) ─────
+  function processEmailTxtContent(content: string) {
+    const lines = content.split(/\r?\n/)
+    let matched = 0
+    let total = 0
+    const updatedAccounts = [...parsedAccounts]
+
+    for (const line of lines) {
+      const trimmed = line.trim()
+      if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith('//')) continue
+
+      // Формат: login:email:email_password
+      const parts = trimmed.split(':')
+      if (parts.length < 3) continue
+
+      const login = parts[0].trim()
+      const email = parts[1].trim()
+      const emailPassword = parts.slice(2).join(':').trim()
+
+      if (!login || !email || !emailPassword) continue
+      total++
+
+      const account = updatedAccounts.find(
+        (a) => a.login.toLowerCase() === login.toLowerCase()
+      )
+      if (account) {
+        account.email = email
+        account.emailPassword = emailPassword
+        matched++
+      }
     }
 
+    setParsedAccounts([...updatedAccounts])
+    setEmailResult({ matched, total })
+  }
+
+  async function handleEmailTxtClick() {
+    if (isElectron) {
+      try {
+        const electronAPI = (window as any).electronAPI
+        const result = await electronAPI.openFile({
+          title: 'Выберите TXT файл с email',
+          filters: [{ name: 'Text Files', extensions: ['txt'] }],
+          properties: ['openFile'],
+        })
+        if (result.canceled || !result.filePaths?.length) return
+        const content = await electronAPI.readTextFile(result.filePaths[0])
+        processEmailTxtContent(content)
+      } catch {
+        // Диалог отменён или ошибка
+      }
+    } else {
+      emailInputRef.current?.click()
+    }
+  }
+
+  function handleEmailFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    const reader = new FileReader()
+    reader.onload = (ev) => {
+      processEmailTxtContent(ev.target?.result as string)
+    }
+    reader.readAsText(file, 'utf-8')
     e.target.value = ''
   }
 
@@ -962,22 +1404,33 @@ function ImportWizardContent({ onDone, onCancel, existingAccounts }: ImportWizar
 
   return (
     <div>
-      {/* Скрытые файловые инпуты */}
-      <input
-        ref={txtInputRef}
-        type="file"
-        accept=".txt"
-        className="hidden"
-        onChange={handleTxtFileChange}
-      />
-      <input
-        ref={maInputRef}
-        type="file"
-        accept=".maFile,.mafile"
-        multiple
-        className="hidden"
-        onChange={handleMaFilesChange}
-      />
+      {/* Скрытые файловые инпуты (fallback для браузера) */}
+      {!isElectron && (
+        <>
+          <input
+            ref={txtInputRef}
+            type="file"
+            accept=".txt"
+            className="hidden"
+            onChange={handleTxtFileChange}
+          />
+          <input
+            ref={maInputRef}
+            type="file"
+            accept=".maFile,.mafile"
+            multiple
+            className="hidden"
+            onChange={handleMaFilesChange}
+          />
+          <input
+            ref={emailInputRef}
+            type="file"
+            accept=".txt"
+            className="hidden"
+            onChange={handleEmailFileChange}
+          />
+        </>
+      )}
 
       {/* Индикатор шагов */}
       <div className="flex items-center gap-2 mb-6">
@@ -1064,6 +1517,10 @@ function ImportWizardContent({ onDone, onCancel, existingAccounts }: ImportWizar
                     <FolderOpen className="h-4 w-4" />
                     Выбрать файлы
                   </Button>
+                  <Button variant="outline" onClick={handleEmailTxtClick}>
+                    <Mail className="h-4 w-4" />
+                    Импорт email
+                  </Button>
                   <Button variant="ghost" onClick={handleSkipMaFiles}>
                     Пропустить
                   </Button>
@@ -1071,6 +1528,21 @@ function ImportWizardContent({ onDone, onCancel, existingAccounts }: ImportWizar
               </div>
             </div>
           </div>
+
+          {/* Результат импорта email */}
+          {emailResult && (
+            <div className="rounded-lg border border-[hsl(var(--success)/0.3)] bg-[hsl(var(--success)/0.05)] p-4 flex items-center gap-3">
+              <Mail className="h-5 w-5 text-[hsl(var(--success))] flex-shrink-0" />
+              <div>
+                <p className="text-sm font-medium">
+                  Email привязан к {emailResult.matched} из {emailResult.total} {pluralAccounts(emailResult.total)}
+                </p>
+                <p className="text-xs text-[hsl(var(--muted-foreground))]">
+                  Формат файла: login:email:email_password
+                </p>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

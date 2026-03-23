@@ -1,0 +1,115 @@
+# Claude Autonomous Progress — Warmup & Farming Testing
+# Branch: dev/autonomous-setup
+# Updated: 2026-03-17
+
+## Самодиагностика
+- Backend (localhost:8420): OK
+- Frontend (localhost:5173): OK
+- ASF (localhost:1242): DOWN (не критично, замокан в тестах)
+- DB (SQLAlchemy + aiosqlite): OK
+- Playwright (chromium): OK
+
+## Task Brief: task_warmup_testing.md
+
+### Задача 1: End-to-end тест прогрева — DONE
+Статус: API протестировано, фронтенд проверен.
+
+Что проверено:
+- GET /api/health → OK
+- Swagger UI (localhost:8420/docs) → загружается, скриншот сохранён
+- GET /api/warmup/quests → 13 квестов возвращаются корректно
+- POST /api/warmup/start → task_id генерируется, warmup запускается
+- GET /api/warmup/status/{task_id} → polling работает, статусы обновляются
+- POST /api/warmup/stop/{task_id} → останавливает warmup
+- GET /api/warmup/sessions → возвращает сессии из БД
+- Warmup с dummy аккаунтом: setup_avatar → done (Playwright запустился)
+
+Ограничения:
+- Нет реальных Steam-аккаунтов в БД для полного e2e теста
+- Квесты Steam требуют валидный логин/пароль/shared_secret
+
+Скриншоты: backend/test_evidence/swagger_api.png
+
+### Задача 2: Тест каждого квеста — PARTIAL
+Статус: API-уровень проверен, индивидуальные квесты требуют реальных аккаунтов.
+
+Что проверено:
+- QUEST_LIST содержит 13 квестов, все возвращаются через API
+- Квесты разбиты на 3 группы зависимостей (profile, store, social)
+- shuffle_quests() сохраняет порядок внутри групп
+- _group_shuffled_quests() корректно формирует группы
+
+Не проверено (требует Steam-аккаунт):
+- Реальное выполнение каждого квеста на Steam
+- Селекторы страниц Steam (могут устареть)
+
+### Задача 3: Тест фронтенда WarmupPage — DONE
+Статус: фронтенд доработан и протестирован.
+
+Что было:
+- WarmupPage отображал квесты, аккаунты, мастер-аккаунт
+- Не было warmup_timeout и max_quest_retries
+- Не было отображения retry count на квестах
+- Не было статуса "skipped" в StatusBadge
+
+Что доработано:
+- Добавлена секция "Настройки надёжности":
+  - Timeout на аккаунт (input, default: 600 сек / 10 мин)
+  - Макс. retry на квест (selector: 1/2/3/5, default: 3)
+- QuestStatus интерфейс: добавлено поле retries
+- Квест-бейджи теперь показывают retry count (иконка RotateCcw + число)
+- Квест-бейджи показывают иконку SkipForward для skipped квестов
+- StatusBadge: добавлен статус "Пропущен" (жёлтый)
+- handleStart() отправляет warmup_timeout и max_quest_retries в API
+- Инфо-панель обновлена: retry, timeout, антибан
+
+Верификация:
+- TypeScript: 0 ошибок (npx tsc --noEmit)
+- Страница загружается корректно (скриншот)
+- Все 13 квестов отображаются
+- Настройки надёжности видны и интерактивны
+
+Скриншоты: backend/test_evidence/warmup_page_initial.png, warmup_page_updated.png
+
+### Задача 4: Тест Smart Farming UI — DONE
+Статус: UI проверен, API протестирован.
+
+Что проверено:
+- FarmingPage: табы "Обычный фарм" / "Умный фарм" работают
+- Smart Farming UI: окно активности, перерывы, ротация, jitter — всё отображается
+- API: POST /asf/farm/smart-start → создаёт сессию (status: pending → active)
+- API: GET /asf/farm/smart-sessions → возвращает активные сессии
+- API: POST /asf/farm/smart-stop → останавливает сессию (status: stopped)
+- API: GET /asf/farm/sessions-db → персистентные сессии из БД
+
+Скриншоты: backend/test_evidence/smart_farming_ui.png
+
+### Задача 5: Интеграционные исправления — DONE
+Статус: все найденные проблемы исправлены.
+
+Исправлено:
+- WarmupPage: добавлены warmup_timeout + max_quest_retries UI
+- WarmupPage: retry count и skipped статус отображаются
+- WarmupPage: StatusBadge поддерживает все 5 статусов
+- Все 56 unit tests проходят (0 failures)
+- TypeScript компиляция без ошибок
+- API login работает через JSON (не form-data)
+
+Не требует исправления:
+- Alembic миграция уже работает
+- Smart Farming UI уже был реализован ранее
+- ASF DOWN — не влияет на тестирование (замокан)
+
+## Коммиты
+- e1b0ffc: Tasks 1+2 (antiban + retry)
+- 46089ab: Task 3 (smart farming)
+- ae5eeac: Task 4 (session persistence)
+- badd775: Task 5 (timing optimization)
+- bf25759: Smart Farming UI (FarmingPage)
+- (new): WarmupPage: timeout/retry settings, quest retry display
+
+## Тесты — итого
+- Unit tests: 56/56 passed (259s)
+- Live tests: 15 passed (из предыдущей сессии)
+- API smoke tests: all endpoints responding correctly
+- Frontend: TypeScript 0 errors, pages render correctly

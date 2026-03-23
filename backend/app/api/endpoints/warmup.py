@@ -8,22 +8,30 @@ GET  /warmup/quests      — список доступных квестов
 """
 
 import asyncio
+import logging
+import random
 import threading
 import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.endpoints.auth import get_current_user
+from app.database import get_db, async_session
 from app.models.user import User
 from app.services.warmup_service import (
     WarmupRunner,
     AccountWarmupStatus,
     QUEST_LIST,
+    get_rate_limiter,
 )
 from app.services.steam_browser import _ensure_proactor
 from app.services import text_generator
+from app.services.session_persistence import save_warmup_session
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -42,6 +50,10 @@ class WarmupStartRequest(BaseModel):
     max_concurrent: int = 2
     proxy_config: dict | None = None  # {server, username?, password?}
     text_prompt: str | None = None    # промпт для LLM-генерации текстов (стиль/тон)
+    max_accounts_per_minute: int = 3  # rate limiting: макс. аккаунтов в минуту
+    warmup_timeout: int = 600         # общий timeout на аккаунт в секундах (default: 10 мин)
+    max_quest_retries: int = 3        # кол-во retry при ошибке квеста
+    friend_requests_count: int = 3    # количество заявок в друзья (1-10)
 
 
 class WarmupStopRequest(BaseModel):
@@ -128,6 +140,18 @@ async def _run_warmup(
                 status.status = "skipped"
                 return
 
+            login = acc.get("login", "")
+
+            # Сохраняем сессию в БД — running
+            try:
+                async with async_session() as db:
+                    await save_warmup_session(
+                        db, login=login, owner_id=task["owner_id"],
+                        status="running", quests_total=len(req.quests),
+                    )
+            except Exception:
+                pass  # Не блокируем warmup из-за ошибки БД
+
             generated_texts = {
                 "nickname": nicknames[idx] if idx < len(nicknames) else None,
                 "bio": bios[idx] if idx < len(bios) else None,
@@ -135,8 +159,10 @@ async def _run_warmup(
                 "comment": comments[idx] if idx < len(comments) else None,
             }
 
+            rate_limiter = get_rate_limiter(req.max_accounts_per_minute)
+
             runner = WarmupRunner(
-                login=acc.get("login", ""),
+                login=login,
                 password=acc.get("password", ""),
                 shared_secret=acc.get("shared_secret"),
                 master_steam_id=req.master_steam_id,
@@ -144,6 +170,10 @@ async def _run_warmup(
                 quest_ids=req.quests,
                 status=status,
                 generated_texts=generated_texts,
+                rate_limiter=rate_limiter,
+                warmup_timeout=req.warmup_timeout,
+                max_quest_retries=req.max_quest_retries,
+                friend_requests_count=req.friend_requests_count,
             )
 
             # Запускаем sync Playwright в отдельном потоке
@@ -168,6 +198,31 @@ async def _run_warmup(
                 status.error = str(e)[:300]
 
             task["completed"] += 1
+
+            # Антибан: задержка между аккаунтами (1–5 мин), не блокирует статус
+            if task["completed"] < task["total"] and not task["stop_flag"]:
+                post_delay = random.uniform(60, 300)
+                logger.info(f"[Warmup] {login}: пауза {post_delay / 60:.1f} мин перед следующим аккаунтом")
+                await asyncio.sleep(post_delay)
+
+            # Сохраняем финальный статус в БД
+            try:
+                quests_data = [
+                    {"quest_id": q.quest_id, "quest_name": q.quest_name,
+                     "status": q.status, "error": q.error, "retries": q.retries}
+                    for q in status.quests
+                ]
+                async with async_session() as db:
+                    await save_warmup_session(
+                        db, login=login, owner_id=task["owner_id"],
+                        status=status.status, quests=quests_data,
+                        current_quest=status.current_quest,
+                        quests_done=status.quests_done,
+                        quests_total=status.quests_total,
+                        error=status.error,
+                    )
+            except Exception:
+                pass
 
     # Запускаем все аккаунты с семафором
     tasks = [process_one(i, acc, status) for i, (acc, status) in enumerate(account_statuses)]
@@ -214,6 +269,33 @@ async def generate_texts(
         user_prompt=prompt,
     )
     return {"texts": texts, "text_type": text_type, "count": len(texts)}
+
+
+@router.get("/sessions")
+async def warmup_sessions(
+    include_finished: bool = False,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Сессии warmup из БД (персистентные, переживают рестарт)."""
+    from app.services.session_persistence import get_warmup_sessions
+    sessions = await get_warmup_sessions(db, owner_id=current_user.id, include_finished=include_finished)
+    return {
+        "sessions": [
+            {
+                "id": s.id,
+                "login": s.account_login,
+                "status": s.status,
+                "quests_done": s.quests_done,
+                "quests_total": s.quests_total,
+                "current_quest": s.current_quest,
+                "error": s.error,
+                "started_at": s.started_at.isoformat() if s.started_at else None,
+                "finished_at": s.finished_at.isoformat() if s.finished_at else None,
+            }
+            for s in sessions
+        ]
+    }
 
 
 @router.post("/stop/{task_id}")
