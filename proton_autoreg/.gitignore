@@ -1,0 +1,25 @@
+# Веса моделей
+*.pth
+*.pt
+!requirements*.txt
+
+# Датасеты (слишком большие для git)
+captcha_dataset/
+captcha_dataset_v2/
+yolo_figures/
+yolo_puzzles/
+yolo_letters/
+yolo_arrows/
+
+# YOLO runs
+runs/
+
+# Virtual environment
+venv/
+
+# Debug screenshots
+debug_*.png
+
+# Python
+__pycache__/
+*.pyc

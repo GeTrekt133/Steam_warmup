@@ -12,7 +12,7 @@ import torch
 import segmentation_models_pytorch as smp
 
 # ── Пути ──────────────────────────────────────────────────────────────
-MODEL_PATH = Path(__file__).resolve().parent.parent / "Steam_warmup_puzzle" / "backend" / "app" / "captcha" / "models" / "puzzle_unet.pth"
+MODEL_PATH = Path(__file__).resolve().parent.parent / "backend" / "app" / "captcha" / "models" / "puzzle_unet.pth"
 
 # ── Координаты обрезки (скриншот iframe 682×600 → фото 350×370) ──────
 CROP_TOP = 89
@@ -110,6 +110,46 @@ def solve_screenshot(screenshot_bgr: np.ndarray) -> tuple[int, int, float] | Non
     return cx_out, cy_out, confidence
 
 
+def solve_photo_direct(photo_bgr: np.ndarray) -> tuple[int, int, float] | None:
+    """
+    Принимает ТОЛЬКО фото пазла (без UI обвязки) в BGR.
+    Подаёт напрямую в U-Net без crop. Для CV пайплайна.
+    Возвращает (x, y, confidence) в координатах фото.
+    """
+    s = _get_solver()
+    model, device, img_size = s["model"], s["device"], s["img_size"]
+
+    photo_h, photo_w = photo_bgr.shape[:2]
+
+    rgb = cv2.cvtColor(photo_bgr, cv2.COLOR_BGR2RGB)
+    resized = cv2.resize(rgb, (img_size, img_size))
+    tensor = resized.astype(np.float32) / 255.0
+    tensor = (tensor - MEAN) / STD
+    tensor = torch.from_numpy(tensor.transpose(2, 0, 1)).unsqueeze(0).to(device)
+
+    with torch.no_grad():
+        logits = model(tensor)
+        probs = torch.sigmoid(logits).squeeze().cpu().numpy()
+
+    mask = (probs > 0.5).astype(np.uint8)
+    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(mask)
+
+    if num_labels <= 1:
+        print("    [unet] Маска пустая — тень не найдена")
+        return None
+
+    areas = stats[1:, cv2.CC_STAT_AREA]
+    best_label = np.argmax(areas) + 1
+    cx_resized, cy_resized = centroids[best_label]
+
+    cx = int(round(cx_resized * photo_w / img_size))
+    cy = int(round(cy_resized * photo_h / img_size))
+    confidence = float(probs[labels == best_label].mean())
+
+    print(f"    [unet-direct] Тень: ({cx},{cy}) confidence={confidence:.3f}")
+    return cx, cy, confidence
+
+
 def find_piece_in_canvas(canvas_img: np.ndarray) -> tuple[int, int]:
     """Находит кусочек пазла (верхний левый угол canvas) через Canny."""
     gray = cv2.cvtColor(canvas_img, cv2.COLOR_BGR2GRAY)
@@ -142,16 +182,17 @@ def _find_piece_in_screenshot(screenshot: np.ndarray) -> tuple[int, int]:
         # Берём самый крупный контур — это piece
         cnt = max(contours, key=cv2.contourArea)
         area = cv2.contourArea(cnt)
-        M = cv2.moments(cnt)
-        if M['m00'] > 0 and area > 200:
-            cx = int(M['m10'] / M['m00'])
-            cy = int(M['m01'] / M['m00'])
-            print(f"    [piece] area={area:.0f} center=({cx},{cy})")
+        if area > 100:
+            # Центр bounding box — точнее чем центр масс контура
+            x, y, bw, bh = cv2.boundingRect(cnt)
+            cx = x + bw // 2
+            cy = y + bh // 2
+            print(f"    [piece] area={area:.0f} bbox=({x},{y},{bw},{bh}) center=({cx},{cy})")
             return cx, cy
 
     # Fallback
     print("    [piece] контур не найден, fallback")
-    return CROP_LEFT + 30, CROP_TOP - 10
+    return w // 6, h // 6
 
 
 def _find_captcha_iframe(page):
